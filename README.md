@@ -57,17 +57,45 @@ curl.exe --ssl-no-revoke -L -x http://10.200.1.26:18081 -o out.msi https://githu
 
 服务端支持标准 SOCKS5 的 `CONNECT` 与 `UDP ASSOCIATE`，`--token` 时走 RFC1929 用户名/密码认证（用户名默认 `ccs`）。
 
-**Windows 客户端：sing-box TUN**（`client/` 目录已备好）
+**Windows 客户端：sing-box TUN**
 
 > 服务器只是出口。Windows 上不装 TUN 客户端，UU 远程不会自动走这个代理——它不读系统代理，也没有代理设置项。
 
-```powershell
-# 管理员 PowerShell，在 client 目录下
-.\run-tun.ps1 -Check              # 先诊断：管理员/端口/代理/组件
-.\run-tun.ps1 -Password s3cret    # 诊断通过后一键启动
+整个部署只有两个脚本，各跑一次：
+
+### ① 跳板机上跑 `make-bundle.sh`
+
+```bash
+cd ~/proxy-inside
+sh make-bundle.sh
 ```
 
-脚本会：诊断 → 下载 `sing-box.exe`（锁 v1.11.x，配置格式匹配）→ 补 `wintun.dll` → 生成配置 → 起 TUN。
+它自动做完：查 sing-box 最新版 → 多镜像下载 + 完整性校验 → 下载 `wintun.dll` →
+按 `SERVER/SOCKS_PORT/SOCKS_USER/TOKEN` 生成 `config.json` → 打包成
+`client/client-bundle.tgz` → 在 **18090** 起分发服务。
+
+输出最后会告诉你 Windows 上该怎么跑。常用环境变量（都有默认值）：
+
+```bash
+SERVER=10.200.1.26 SOCKS_PORT=18082 TOKEN=s3cret HTTP_PORT=18090 sh make-bundle.sh
+```
+
+想强制重下客户端二进制：`sh make-bundle.sh --refresh`。
+
+### ② Windows 上双击 `启动.bat`
+
+`client/启动.bat` 自动请求管理员权限并启动，不需要敲任何命令。
+令牌和跳板机地址写在 bat 开头两行，改那里即可。
+
+或者手动跑（等价）：
+
+```powershell
+.\run-tun.ps1 -Check -Password s3cret   # 只诊断
+.\run-tun.ps1 -Password s3cret          # 诊断 + 启动
+```
+
+`run-tun.ps1` 发现缺 `sing-box.exe` / `wintun.dll` 时，会从跳板机 18090 拉
+`client-bundle.tgz` 解包（不再访问 github.com），然后起 TUN。
 起来后整机流量（含 UDP）走跳板机，UU 远程、浏览器、git 全都通。
 
 **UDP relay 地址必须对**：跳板机有多网卡（docker0 之类）时自动探测可能选错，导致 TCP 通、UDP 不通。

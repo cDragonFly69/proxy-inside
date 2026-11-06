@@ -1,14 +1,13 @@
 {
-  "log": {
-    "level": "warn",
-    "timestamp": true
-  },
+  "log": { "level": "warn", "timestamp": true },
   "dns": {
     "servers": [
-      { "tag": "remote", "address": "8.8.8.8", "detour": "proxy" },
-      { "tag": "local", "address": "223.5.5.5", "detour": "direct" }
+      { "type": "udp", "tag": "remote", "server": "8.8.8.8", "detour": "proxy" },
+      { "type": "udp", "tag": "local", "server": "223.5.5.5", "detour": "direct" }
     ],
-    "rules": [],
+    "rules": [
+      { "ip_is_private": true, "server": "local" }
+    ],
     "final": "remote"
   },
   "inbounds": [

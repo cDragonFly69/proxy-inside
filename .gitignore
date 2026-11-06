@@ -5,3 +5,11 @@ __pycache__/
 .venv/
 venv/
 *.pid
+
+# 客户端二进制与打包产物（由 make-bundle.sh 生成，不入库）
+client/sing-box.exe
+client/wintun.dll
+client/config.json
+client/client-bundle.tgz
+client/*.zip
+client/*.tgz
