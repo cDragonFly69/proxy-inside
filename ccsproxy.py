@@ -3,6 +3,8 @@
 """ccsproxy.py — 零依赖 HTTP 正向代理（CONNECT + 普通 HTTP）。python3 ccsproxy.py [port] [bind_host] [--allow a,b] [--token T] [--mask-ip IP]"""
 import argparse
 import base64
+
+import users as usertable
 import os
 import signal
 import socket
@@ -144,15 +146,13 @@ def handle(conn, addr, cfg):
         if parsed is None:
             return fail(conn, 400, "Bad Request", ip, "400 bad request")
         method, target, version, headers = parsed
-        if cfg.token:  # 令牌校验；Bearer 与 Basic(user:token) 都认，git/浏览器/系统代理才能用
+        who = ""
+        if cfg.token or cfg.users:  # 单令牌或 users.json 多用户；Bearer 与 Basic(user:token) 都认
             auth = next((v for k, v in headers if k.lower() == "proxy-authorization"), "").strip()
-            low = auth.lower()          # 只对 scheme 做小写，Base64 部分必须保留原始大小写
-            ok = low == "bearer " + cfg.token.lower()
-            if not ok and low.startswith("basic "):
-                try: ok = base64.b64decode(auth[6:]).decode("utf-8", "replace").split(":", 1)[1] == cfg.token
-                except Exception: ok = False
-            if not ok:
+            who = usertable.pick(auth, cfg.token, cfg.users) or ""
+            if not who:
                 return fail(conn, 407, "Proxy Authentication Required", ip, "407 token missing/bad")
+        tag = (" [%s]" % who) if who else ""
         if method.upper() == "CONNECT":
             host, port = split_hostport(target, 443)
         else:  # 普通 HTTP：绝对 URI → origin-form
@@ -166,7 +166,7 @@ def handle(conn, addr, cfg):
         if not host_allowed(host, cfg.allow):
             return fail(conn, 403, "Forbidden", ip, "403 %s not allowed" % host)
         if method.upper() == "CONNECT":
-            log("CONNECT", "%s:%d <- %s" % (host, port, ip))
+            log("CONNECT", "%s:%d <- %s%s" % (host, port, ip, tag))
         else:
             log("HTTP", "%s%s <- %s" % (host, path, ip))
         try:
@@ -205,7 +205,7 @@ def serve(cfg):
     ls.settimeout(0.5)  # accept 带超时：信号到达后最多 0.5s 退出，端口立即释放
     LS = ls
     log("INFO", "listening %s:%d allow=%s token=%s max-conn=%d timeout=%ss srcip=%s mask=%s" % (
-        cfg.bind, cfg.port, ",".join(cfg.allow) or "ALL", "on" if cfg.token else "off",
+        cfg.bind, cfg.port, ",".join(cfg.allow) or "ALL", "on(%d)" % (1 + len(usertable.load(cfg.users))) if (cfg.token or cfg.users) else "off",
         cfg.max_conn, cfg.timeout, cfg.srcip or "auto", cfg.mask_ip or "off"))
     while not SHUTDOWN:
         try: conn, addr = ls.accept()
@@ -230,6 +230,7 @@ def parse_args(argv):
     ap.add_argument("bind", nargs="?", default="0.0.0.0", help="监听地址，默认 0.0.0.0")
     ap.add_argument("--allow", default="", help="目标白名单，逗号分隔（后缀匹配），空=不限")
     ap.add_argument("--token", default="", help="要求 Proxy-Authorization: Bearer <token>")
+    ap.add_argument("--users", default="", help="多用户令牌表 users.json；与 --token 可并存")
     ap.add_argument("--max-conn", type=int, default=200, dest="max_conn", help="并发上限，默认 200")
     ap.add_argument("--timeout", type=float, default=30.0, help="连接/读写超时秒，默认 30")
     ap.add_argument("--srcip", default="", help="出站源地址绑定（多网卡出口 IP），默认系统选路")

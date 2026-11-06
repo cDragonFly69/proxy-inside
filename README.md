@@ -1,41 +1,64 @@
 # ccsproxy
 
-内网跳板机出网工具，两个零依赖 Python 服务，一条 `sh start.sh` 全起：
+内网跳板机出网工具，**一个容器 + 一个网页面板**搞定全组共用：
 
-| 文件 | 作用 | 协议 | 端口 |
+| 服务 | 协议 | 端口 | 用途 |
 |---|---|---|---|
-| `ccsproxy.py` | HTTP 正向代理 | TCP（CONNECT 隧道 + 普通 HTTP） | 18081 |
-| `socks5udp.py` | SOCKS5 服务 | TCP + **UDP ASSOCIATE** | 18082 |
+| HTTP 正向代理 | TCP（CONNECT 隧道） | 18081 | `curl` / `git https` / 浏览器 / 下文件 |
+| SOCKS5 | TCP + **UDP ASSOCIATE** | 18082 | TUN 客户端、UDP 应用 |
+| GitHub SSH 中转 | TCP 透传 | 2222 | `git push` over SSH（443 被 SNI 阻断时用） |
+| 管理面板 | HTTP | 8080 | 启停服务、加人发令牌、看日志、生成接入说明 |
 
-只依赖 Python 3.8+ 标准库（socket / threading / select / argparse / signal），不需要 pip、不需要 root（端口 > 1024）。
+纯 Python 3.8+ 标准库，`requirements.txt` 都不需要。
 
-- 下文件、`curl`/`git`/浏览器 → 用 18081 的 HTTP 代理。
-- 要跑 **UU 远程**这类 UDP 应用 → 用 18082 的 SOCKS5，Windows 端配 sing-box TUN（见下文）。
-
-## 快速开始
+## Docker 部署（推荐）
 
 ```bash
-# 裸机（推荐：UDP 场景只有这种方式最省心）
-sh start.sh
-# 带令牌和白名单
-TOKEN=s3cret ALLOW=github.com,163.com sh start.sh
+git clone <repo> && cd proxy_inside
+# 改 docker-compose.yml 里的 PANEL_PASS，然后
+docker compose up -d
+```
 
-# 容器
-docker build -t ccsproxy:1.1 .
-docker run -d --name ccsproxy -p 18081:18081 -p 18082:18082 -e TOKEN=s3cret -e ALLOW=github.com,163.com ccsproxy:1.1
+打开 `http://服务器IP:8080`，用 `PANEL_USER` / `PANEL_PASS` 登录。
+
+首次启动会在 `./data/users.json` 自动建一个 `admin` 用户；如果 compose 里没设 `TOKEN`，
+令牌是随机生成的，**打印在容器日志里**：
+
+```bash
+docker compose logs | grep token
+```
+
+> **UDP 必须 host 网络**：SOCKS5 的 UDP relay 用随机端口，bridge 模式映射不出来。
+> 要用 UU 远程这类 UDP 应用，在 compose 里打开 `network_mode: host`。
+
+## 面板能做什么
+
+- **启停**：HTTP / SOCKS5 / 中转各自独立 Start / Stop / Restart，也可一键全启全停
+- **多人令牌**：给每个同事单独建用户，各拿一个 token；禁用、轮换、删除即时生效（代理热加载，不用重启）
+- **日志**：按服务分开看，连接记录带用户名，例如
+  `[CONNECT] api.github.com:443 <- 10.8.35.107 [zhangsan]`
+- **接入说明**：点一下生成带当前主机地址和令牌的 Markdown，直接发给同事
+
+## 裸机运行（不要容器时）
+
+```bash
+sh start.sh                                   # 起 HTTP + SOCKS5
+TOKEN=s3cret ALLOW=github.com,163.com sh start.sh
+python3 panel.py                              # 想要面板就再起这个
 ```
 
 日志：
 
 ```
-[INFO] start.sh http=18081 socks=18082 bind=0.0.0.0 allow=ALL token=on ...
-[INFO] listening 0.0.0.0:18081 allow=ALL token=on max-conn=200 timeout=30.0s srcip=auto
-[INFO] socks5 listening 0.0.0.0:18082 token=on udp-advertise=auto
-[CONNECT] api.github.com:443 <- 10.8.35.107
-[UDP] associate 10.200.1.26:52341 <- 10.8.35.107
+[INFO] listening 0.0.0.0:18081 allow=ALL token=on(3) max-conn=200 timeout=30.0s
+[INFO] socks5 listening 0.0.0.0:18082 token=on(3) udp-advertise=auto
+[CONNECT] api.github.com:443 <- 10.8.35.107 [alice]
+[UDP] associate 10.200.1.26:52341 <- 10.8.35.107 [alice]
 ```
 
-收工：`Ctrl+C`，或 `kill $(cat /tmp/ccsproxy.pid)`，两个端口一起释放。
+`token=on(3)` 表示单令牌 + users.json 里 3 个用户，一共 4 个可用。
+
+收工：`Ctrl+C`，或 `kill $(cat /tmp/ccsproxy.pid)`。
 
 ## HTTP 代理（18081）
 
@@ -147,6 +170,33 @@ git push -u origin HEAD
 provide shell access.`
 
 > SSH 不是 TLS，没有 SNI 可拦，所以这条路能过；HTTPS 那条不行，不用再试。
+
+## 同事怎么接
+
+面板首页点「生成说明」，会输出一段带主机名和令牌的 Markdown，内容包括：
+
+**① HTTP(S) 代理**
+```bash
+export http_proxy=http://JUMP:18081
+export https_proxy=$http_proxy
+# 或给 git 单独配
+git config --global http.proxy http://any:<你的token>@JUMP:18081
+```
+
+**② SOCKS5（含 UDP）**
+```
+socks5h://JUMP:18082   用户名任意，密码 <你的token>
+```
+
+**③ GitHub SSH 中转**
+```bash
+git remote set-url origin ssh://git@JUMP:2222/OWNER/REPO.git
+ssh -o StrictHostKeyChecking=accept-new -p 2222 git@JUMP   # 应回 Hi <用户名>!
+git push -u origin HEAD
+```
+
+每个同事一个 token，日志里按 token 反查用户名，谁用了多少一目了然。
+换人、离职、令牌泄漏 → 面板里禁用或轮换，**不用重启任何服务**。
 
 ## 参数
 

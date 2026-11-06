@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代理控制台</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --line:#252a33;
+  --txt:#e6e9ef; --dim:#8b93a1; --acc:#4c8dff;
+  --ok:#3ddc84; --warn:#ffb454; --err:#ff5c5c;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);
+  font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:16px 22px;
+  border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:9}
+header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.5px}
+header .sp{flex:1}
+.tag{font-size:12px;color:var(--dim)}
+main{padding:18px 22px;max-width:1180px;margin:0 auto;display:grid;gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+.card h2{margin:0 0 12px;font-size:13px;color:var(--dim);font-weight:600;
+  letter-spacing:1px;text-transform:uppercase}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.svc{border:1px solid var(--line);border-radius:8px;padding:14px;background:#12151b}
+.svc .top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--err);flex:none}
+.dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.svc .name{font-weight:600}
+.svc .meta{font-size:12px;color:var(--dim);margin:2px 0 10px;word-break:break-all}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+button{cursor:pointer;border:1px solid var(--line);background:#1e232c;color:var(--txt);
+  padding:6px 12px;border-radius:6px;font-size:13px;transition:.15s}
+button:hover{border-color:var(--acc);color:var(--acc)}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+button.primary:hover{filter:brightness(1.1);color:#fff}
+button.danger:hover{border-color:var(--err);color:var(--err)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+th{color:var(--dim);font-weight:500;font-size:12px}
+code{background:#0b0d11;padding:2px 6px;border-radius:4px;font-size:12px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
+pre{background:#0b0d11;border:1px solid var(--line);border-radius:8px;padding:12px;
+  overflow:auto;max-height:340px;font-size:12px;margin:0;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+input,select{background:#0b0d11;border:1px solid var(--line);color:var(--txt);
+  padding:6px 10px;border-radius:6px;font-size:13px;outline:none}
+input:focus,select:focus{border-color:var(--acc)}
+.toast{position:fixed;right:20px;bottom:20px;background:#1e232c;border:1px solid var(--line);
+  padding:10px 16px;border-radius:8px;opacity:0;transform:translateY(8px);
+  transition:.2s;pointer-events:none;font-size:13px;max-width:60vw}
+.toast.show{opacity:1;transform:none}
+.mono{font-family:ui-monospace,Menlo,monospace}
+</style>
+</head>
+<body>
+<header>
+  <h1>代理控制台</h1>
+  <span class="tag" id="hostTag"></span>
+  <span class="sp"></span>
+  <button onclick="refreshAll()">刷新</button>
+</header>
+
+<main>
+  <div class="card">
+    <h2>服务</h2>
+    <div class="grid" id="services"></div>
+    <div class="btns" style="margin-top:14px">
+      <button class="primary" onclick="all('start')">全部启动</button>
+      <button class="danger" onclick="all('stop')">全部停止</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>用户与令牌</h2>
+    <div class="row">
+      <input id="newName" placeholder="用户名，如 zhangsan" style="flex:1;min-width:160px">
+      <button class="primary" onclick="addUser()">添加</button>
+    </div>
+    <table>
+      <thead><tr><th>用户</th><th>令牌</th><th>状态</th><th style="width:1%">操作</th></tr></thead>
+      <tbody id="users"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>日志</h2>
+    <div class="row">
+      <select id="logSvc" onchange="loadLogs()">
+        <option value="http">HTTP 代理</option>
+        <option value="socks">SOCKS5</option>
+        <option value="relay">GitHub 中转</option>
+      </select>
+      <button onclick="loadLogs()">刷新</button>
+      <label class="tag"><input type="checkbox" id="autoLog" checked style="vertical-align:-2px"> 自动刷新</label>
+    </div>
+    <pre id="logs">（点刷新加载）</pre>
+  </div>
+
+  <div class="card">
+    <h2>同事接入</h2>
+    <div class="row">
+      <button onclick="loadDoc()">生成说明</button>
+      <button onclick="copyDoc()">复制全部</button>
+    </div>
+    <pre id="doc">（点生成，会带上当前主机地址和第一个可用令牌）</pre>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let docText = "";
+
+function toast(msg, err){
+  const t = $("#toast");
+  t.textContent = msg;
+  t.style.borderColor = err ? "var(--err)" : "var(--line)";
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+async function api(path, opt){
+  const r = await fetch(path, opt);
+  if (r.status === 401){ toast("需要登录", true); throw new Error("401"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+
+async function loadStatus(){
+  const d = await api("/api/status");
+  $("#hostTag").textContent = d.host || "";
+  const box = $("#services");
+  box.innerHTML = d.services.map(s => `
+    <div class="svc">
+      <div class="top">
+        <span class="dot ${s.running ? "on" : ""}"></span>
+        <span class="name">${s.label}</span>
+        <span class="tag">:${s.port}</span>
+      </div>
+      <div class="meta">${s.running ? "运行中 · pid " + s.pid + " · " + fmtUp(s.uptime)
+        : (s.exit_code !== null && s.exit_code !== undefined ? "已退出 code=" + s.exit_code : "已停止")}</div>
+      <div class="meta">${s.hint}</div>
+      <div class="btns">
+        ${s.running
+          ? `<button onclick="act('${s.name}','restart')">重启</button>
+             <button class="danger" onclick="act('${s.name}','stop')">停止</button>`
+          : `<button class="primary" onclick="act('${s.name}','start')">启动</button>`}
+      </div>
+    </div>`).join("");
+}
+
+function fmtUp(sec){
+  if (sec < 60) return sec + " 秒";
+  if (sec < 3600) return Math.floor(sec/60) + " 分钟";
+  return Math.floor(sec/3600) + " 小时 " + Math.floor(sec%3600/60) + " 分";
+}
+
+async function act(name, action){
+  try{
+    await api("/api/service", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({name, action})
+    });
+    toast(name + " " + action + " 完成");
+    loadStatus();
+  }catch(e){ toast("失败：" + e.message, true); }
+}
+
+async function all(action){
+  try{
+    await api("/api/all", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({action})
+    });
+    toast("全部 " + action + " 完成");
+    loadStatus();
+  }catch(e){ toast("失败：" + e.message, true); }
+}
+
+async function loadUsers(){
+  const d = await api("/api/users");
+  $("#users").innerHTML = d.users.map(u => `
+    <tr>
+      <td>${u.name}</td>
+      <td><code>${u.token}</code></td>
+      <td>${u.enabled ? '<span style="color:var(--ok)">启用</span>'
+                      : '<span style="color:var(--dim)">禁用</span>'}</td>
+      <td nowrap>
+        <button onclick="userAct('rotate','${u.name}')">换令牌</button>
+        <button onclick="userAct('toggle','${u.name}')">${u.enabled ? "禁用" : "启用"}</button>
+        <button class="danger" onclick="userAct('delete','${u.name}')">删除</button>
+      </td>
+    </tr>`).join("") || `<tr><td colspan="4" class="tag">还没有用户</td></tr>`;
+}
+
+async function addUser(){
+  const name = $("#newName").value.trim();
+  if (!name) return toast("先填用户名", true);
+  try{
+    const d = await api("/api/users", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({action:"add", name})
+    });
+    $("#newName").value = "";
+    toast("已添加，令牌：" + d.token);
+    loadUsers();
+  }catch(e){ toast("失败：" + e.message, true); }
+}
+
+async function userAct(action, name){
+  try{
+    const d = await api("/api/users", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({action, name})
+    });
+    if (d.token && action === "rotate") toast("新令牌：" + d.token);
+    else toast("已" + action);
+    loadUsers();
+  }catch(e){ toast("失败：" + e.message, true); }
+}
+
+async function loadLogs(){
+  const svc = $("#logSvc").value;
+  try{
+    const d = await api("/api/logs?svc=" + svc + "&n=300");
+    const el = $("#logs");
+    el.textContent = d.lines.length ? d.lines.join("\n") : "（暂无日志）";
+    el.scrollTop = el.scrollHeight;
+  }catch(e){ $("#logs").textContent = "读取失败：" + e.message; }
+}
+
+async function loadDoc(){
+  try{
+    const d = await api("/api/connect");
+    docText = d.markdown;
+    $("#doc").textContent = docText;
+  }catch(e){ toast("失败：" + e.message, true); }
+}
+
+function copyDoc(){
+  if (!docText) return toast("先点生成", true);
+  navigator.clipboard.writeText(docText)
+    .then(() => toast("已复制"))
+    .catch(() => toast("复制失败，手动选中", true));
+}
+
+function refreshAll(){ loadStatus(); loadUsers(); }
+
+refreshAll();
+setInterval(loadStatus, 3000);
+setInterval(() => { if ($("#autoLog").checked) loadLogs(); }, 5000);
+</script>
+</body>
+</html>

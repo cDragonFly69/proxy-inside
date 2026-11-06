@@ -23,6 +23,9 @@ NOW = 0
 REAL_LOG = "/tmp/ccsproxy.real.log"  # 与 HTTP 代理共用一份私有记录，0600 仅本用户可读
 
 
+import users as usertable
+
+
 def log(tag, msg):
     print("[%s] %s" % (tag, msg), flush=True)  # 只打主机/端口/客户端 IP，不打凭据
 
@@ -69,41 +72,46 @@ def host_allowed(host, allow):
 
 
 def handshake(conn, cfg):
-    """SOCKS5 握手；配了 --token 就走 RFC1929 用户名/密码认证。"""
+    """SOCKS5 握手。成功返回用户名（无认证时为 "anon"），失败返回 None。"""
     head = recv_exact(conn, 2)
     if not head or head[0] != 5:
-        return False
+        return None
     methods = recv_exact(conn, head[1])
     if methods is None:
-        return False
-    if not cfg.token:  # 无认证
+        return None
+    auth_on = bool(cfg.token or cfg.users)
+    if not auth_on:  # 完全不认证
         if 0 not in methods:
             conn.sendall(b"\x05\xff")
-            return False
+            return None
         conn.sendall(b"\x05\x00")
-        return True
+        return "anon"
     if 2 not in methods:
-        # 有些客户端（如 UU 远程）不会用户名/密码认证，只 offer 0x00。
+        # 有些客户端不实现 RFC1929，只 offer 0x00。
         # 开 --relax-auth 时按无认证放行，目标仍受 --allow 白名单约束。
         if cfg.relax_auth and 0 in methods:
             log("WARN", "client 不支持 RFC1929，按无认证放行（--relax-auth）")
             conn.sendall(b"\x05\x00")
-            return True
+            return "relax"
         conn.sendall(b"\x05\xff")
-        return False
+        return None
     conn.sendall(b"\x05\x02")
     if recv_exact(conn, 1) != b"\x01":
-        return False
+        return None
     n = recv_exact(conn, 1)
     user = recv_exact(conn, n[0]) if n else None
     n = recv_exact(conn, 1)
     pwd = recv_exact(conn, n[0]) if n else None
-    if user and pwd and user.decode("utf-8", "replace") == cfg.user \
-            and pwd.decode("utf-8", "replace") == cfg.token:
+    if user is None or pwd is None:
+        return None
+    who = usertable.check_pair(user.decode("utf-8", "replace"),
+                               pwd.decode("utf-8", "replace"),
+                               cfg.token, cfg.users)
+    if who:
         conn.sendall(b"\x01\x00")
-        return True
+        return who
     conn.sendall(b"\x01\x01")
-    return False
+    return None
 
 
 def read_request(conn):
@@ -306,9 +314,11 @@ def handle(conn, addr, cfg):
         note_real(real, ip, "socks5")
     try:
         conn.settimeout(cfg.timeout)
-        if not handshake(conn, cfg):
+        who = handshake(conn, cfg)
+        if who is None:
             log("ERR", "handshake failed <- %s" % ip)
             return
+        tag = "" if who in ("anon", "relax") else " [%s]" % who
         req = read_request(conn)
         if not req:
             reply(conn, 1)
@@ -326,7 +336,7 @@ def handle(conn, addr, cfg):
                 reply(conn, 5)
                 log("ERR", "502 %s:%d %s <- %s" % (host, port, e, ip))
                 return
-            log("CONNECT", "%s:%d <- %s" % (host, port, ip))
+            log("CONNECT", "%s:%d <- %s%s" % (host, port, ip, tag))
             reply(conn, 0, up.getsockname()[0], up.getsockname()[1])
             try:
                 pump(conn, up)
@@ -359,7 +369,7 @@ def serve(cfg):
     ls.settimeout(0.5)  # accept 带超时，信号到达后及时退出
     LS = ls
     log("INFO", "socks5 listening %s:%d token=%s udp-advertise=%s mask=%s"
-        % (cfg.bind, cfg.port, "on" if cfg.token else "off", cfg.advertise or "auto",
+        % (cfg.bind, cfg.port, "on(%d)" % (1 + len(usertable.load(cfg.users))) if (cfg.token or cfg.users) else "off", cfg.advertise or "auto",
            cfg.mask_ip or "off"))
     while not SHUTDOWN:
         try:
@@ -395,6 +405,7 @@ def parse_args(argv):
     ap.add_argument("port", nargs="?", type=int, default=18082, help="监听端口，默认 18082")
     ap.add_argument("bind", nargs="?", default="0.0.0.0", help="监听地址，默认 0.0.0.0")
     ap.add_argument("--token", default="", help="用户名/密码认证的密码部分（空=不认证）")
+    ap.add_argument("--users", default="", help="多用户令牌表 users.json；与 --token 可并存")
     ap.add_argument("--user", default="ccs", help="认证用户名，默认 ccs")
     ap.add_argument("--allow", default="", help="目标白名单，逗号分隔（后缀匹配），空=不限")
     ap.add_argument("--max-conn", type=int, default=200, dest="max_conn", help="并发上限，默认 200")

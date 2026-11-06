@@ -1,7 +1,10 @@
+.git/
+.gitignore
+.dockerignore
+.DS_Store
+README*.md
+data/
+client/
 __pycache__/
 *.pyc
 *.log
-.git/
-.gitignore
-.DS_Store
-README*.md

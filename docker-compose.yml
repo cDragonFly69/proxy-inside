@@ -1,28 +1,33 @@
 services:
-  ccsproxy:
+  proxy:
     build: .
-    image: ccsproxy:1.0
-    container_name: ccsproxy
+    image: ccs-proxy:latest
+    container_name: ccs-proxy
+    restart: unless-stopped
     ports:
-      - "18081:18081"   # HTTP 正向代理（curl / git / 浏览器）
-      - "18082:18082"   # SOCKS5 + UDP ASSOCIATE（sing-box TUN / UU 远程）
+      - "8080:8080"      # Web 管理面板
+      - "18081:18081"    # HTTP 代理
+      - "18082:18082"    # SOCKS5 + UDP
+      - "2222:2222"      # GitHub SSH 中转
     environment:
-      PORT: "18081"
-      SOCKS_PORT: "18082"
-      ENABLE_SOCKS: "1"          # 0 = 只起 HTTP 代理
-      # 白名单按后缀匹配：163.com 覆盖 UU 远程所有 *.163.com 子域
-      ALLOW: "github.com,codeload.github.com,objects.githubusercontent.com,release-assets.githubusercontent.com,api.github.com,163.com"
-      # 生产务必改掉；也可改用 TOKEN_FILE 挂载 secret
-      TOKEN: "change-me-please"
-      SOCKS_USER: "ccs"
+      # ── 面板登录（务必改）────────────────────────────
+      PANEL_USER: admin
+      PANEL_PASS: change-me-please
+      # ── 代理 ─────────────────────────────────────────
+      # 首次启动会在 /data/users.json 里自动建一个 admin 用户，
+      # token 用下面的 TOKEN；留空则随机生成并打印在容器日志里。
+      TOKEN: ""
+      # 目标白名单，逗号分隔后缀匹配；留空=不限
+      ALLOW: "github.com,163.com,githubusercontent.com"
+      # 日志里展示的客户端 IP（真实 IP 记到 /data/ccsproxy.real.log）
+      MASK_IP: ""
       MAX_CONN: "200"
       TIMEOUT: "30"
-      # 容器内出口 IP 由 docker NAT 决定，--srcip 一般留空；
-      # SOCKS5 的 UDP relay 地址也由程序自动探测容器地址
-      SRCIP: ""
-    restart: "no"          # 临时跳板，用完即关：docker compose down
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+      # 客户端不支持 RFC1929 时按无认证放行（UU 远程这类）
+      RELAX_AUTH: "1"
+      # GitHub SSH 中转的上游
+      GH_RELAY_UPSTREAM: "github.com:22"
+    volumes:
+      - ./data:/data
+    # UDP relay 用随机端口；要用 UDP（UU 远程 / TUN 客户端）必须 host 网络
+    # network_mode: host

@@ -13,3 +13,6 @@ client/config.json
 client/client-bundle.tgz
 client/*.zip
 client/*.tgz
+
+# 面板数据（用户令牌、日志）
+data/
