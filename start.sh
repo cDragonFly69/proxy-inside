@@ -36,6 +36,14 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# 启动前清理：只杀命令行里含本程序名的旧进程，不动别人的服务
+if [ "${KILL_OLD:-1}" = "1" ] && command -v pkill >/dev/null 2>&1; then
+  # 方括号写法让 pkill 不会匹配到执行它的 shell 自身（命令行里的字面方括号不匹配该正则）
+  pkill -f '[c]csproxy[.]py' 2>/dev/null || true
+  pkill -f '[s]ocks5udp[.]py' 2>/dev/null || true
+  sleep 0.5
+fi
+
 PIDS=""
 cleanup() {
   trap - INT TERM
