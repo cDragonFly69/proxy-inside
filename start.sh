@@ -17,6 +17,7 @@ TIMEOUT="${TIMEOUT:-30}"
 SRCIP="${SRCIP:-}"
 SOCKS_USER="${SOCKS_USER:-ccs}"       # SOCKS5 认证用户名
 SOCKS_ADVERTISE="${SOCKS_ADVERTISE:-}" # 回给客户端的 UDP relay 地址，空=自动探测
+MASK_IP="${MASK_IP:-}"                # 日志里展示的客户端 IP（真实 IP 记到 /tmp/ccsproxy.real.log）
 
 # 令牌：优先 TOKEN；否则从 TOKEN_FILE（docker secret / 挂载文件）首行读取
 TOKEN="${TOKEN:-}"
@@ -49,6 +50,7 @@ start_http() {
   if [ -n "$ALLOW" ]; then set -- "$@" --allow "$ALLOW"; fi
   if [ -n "$TOKEN" ]; then set -- "$@" --token "$TOKEN"; fi
   if [ -n "$SRCIP" ]; then set -- "$@" --srcip "$SRCIP"; fi
+  if [ -n "$MASK_IP" ]; then set -- "$@" --mask-ip "$MASK_IP"; fi
   exec python3 "$DIR/ccsproxy.py" "$@"   # exec：后台子 shell 被 python 取代，kill 得到的就是它
 }
 
@@ -57,11 +59,12 @@ start_socks() {
   if [ -n "$ALLOW" ]; then set -- "$@" --allow "$ALLOW"; fi
   if [ -n "$TOKEN" ]; then set -- "$@" --token "$TOKEN" --user "$SOCKS_USER"; fi
   if [ -n "$SOCKS_ADVERTISE" ]; then set -- "$@" --advertise "$SOCKS_ADVERTISE"; fi
+  if [ -n "$MASK_IP" ]; then set -- "$@" --mask-ip "$MASK_IP"; fi
   exec python3 "$DIR/socks5udp.py" "$@"
 }
 
 if [ -n "${TOKEN}" ]; then TOKEN_STATE=on; else TOKEN_STATE=off; fi
-echo "[INFO] start.sh http=${PORT} socks=${SOCKS_PORT} bind=${BIND} allow=${ALLOW:-ALL} token=${TOKEN_STATE} max-conn=${MAX_CONN} timeout=${TIMEOUT}" >&2
+echo "[INFO] start.sh http=${PORT} socks=${SOCKS_PORT} bind=${BIND} allow=${ALLOW:-ALL} token=${TOKEN_STATE} max-conn=${MAX_CONN} timeout=${TIMEOUT} mask=${MASK_IP:-off}" >&2
 
 start_http &
 PIDS="$PIDS $!"

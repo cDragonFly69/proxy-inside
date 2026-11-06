@@ -88,6 +88,7 @@ curl.exe --ssl-no-revoke https://ifconfig.me
 | `--max-conn N` | 200 | 并发上限，超限回 503 |
 | `--timeout S` | 30 | 连接/读写超时秒 |
 | `--srcip IP` | 系统选路 | 出站源地址绑定（多网卡选出口 IP） |
+| `--mask-ip IP` | 空 | 日志与对外记录里把客户端 IP 显示成这个地址，真实 IP 写进私有文件 |
 
 ### socks5udp.py（SOCKS5）
 
@@ -102,10 +103,11 @@ curl.exe --ssl-no-revoke https://ifconfig.me
 | `--timeout S` | 30 | TCP 超时秒 |
 | `--udp-bind IP` | 0.0.0.0 | UDP relay 绑定地址 |
 | `--advertise IP` | 自动探测 | 回给客户端的 UDP relay 地址 |
+| `--mask-ip IP` | 空 | 同 HTTP 代理，日志显示用伪装地址 |
 
 ### start.sh 环境变量
 
-`PORT` `SOCKS_PORT` `ENABLE_SOCKS` `BIND` `ALLOW` `TOKEN` `TOKEN_FILE` `REQUIRE_TOKEN` `MAX_CONN` `TIMEOUT` `SRCIP` `SOCKS_USER` `SOCKS_ADVERTISE`
+`PORT` `SOCKS_PORT` `ENABLE_SOCKS` `BIND` `ALLOW` `TOKEN` `TOKEN_FILE` `REQUIRE_TOKEN` `MAX_CONN` `TIMEOUT` `SRCIP` `SOCKS_USER` `SOCKS_ADVERTISE` `MASK_IP`
 
 ## 容器里的 UDP 限制
 
@@ -119,6 +121,37 @@ services:
   ccsproxy:
     network_mode: host      # Linux 宿主；UDP relay 直接绑定宿主地址
 ```
+
+## 客户端 IP 伪装（MASK_IP / --mask-ip）
+
+```bash
+MASK_IP=10.8.34.61 TOKEN=s3cret sh start.sh
+```
+
+效果：两个服务的所有日志、`[CONNECT]`/`[HTTP]`/`[UDP]` 记录里的客户端地址都显示 `10.8.34.61`，
+任何看 stdout、`docker logs`、日志文件的人都只会看到这个地址。
+
+真实 IP 同时被追加到 `/tmp/ccsproxy.real.log`，权限 `0600`（只有启动代理的那个用户能读）：
+
+```
+2026-11-06 15:05:52	10.8.34.61 <- real 10.8.35.107
+2026-11-06 15:05:52	10.8.34.61 [socks5] <- real 10.8.35.107
+```
+
+自己排查：
+
+```bash
+tail -f /tmp/ccsproxy.real.log       # 唯一起点
+stat -c '%a %U' /tmp/ccsproxy.real.log   # 600 ccspt
+```
+
+**边界（必须知道）：**
+
+- 只影响**代理自己写出来的记录**。`ss -tnp`、`netstat`、交换机 MAC 表、防火墙连接表看到的仍然是真实 IP，
+  那一层由内核和网络设备决定，任何应用层代码都改不了。
+- 伪装地址必须是你确认过的、不会引起冲突的地址；如果 `10.8.34.61` 真机在线，网络层仍以真实 IP 为准，
+  只有日志层面被替换。
+- 日志文件默认路径固定为 `/tmp/ccsproxy.real.log`，容器里也在 `/tmp`，容器重建即丢。
 
 ## 行为说明
 

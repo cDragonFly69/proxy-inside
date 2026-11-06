@@ -4,12 +4,14 @@
     python3 socks5udp.py [port] [bind_host] [--token T] [--user ccs] [--allow a,b] [--timeout S] [--advertise IP]
 客户端：sing-box / v2ray 的 SOCKS5 出站（TCP + UDP），TUN 模式接管整机流量。"""
 import argparse
+import os
 import select
 import signal
 import socket
 import struct
 import sys
 import threading
+import time
 
 BUF = 65536
 LS = None
@@ -18,8 +20,21 @@ LOCK = threading.Lock()
 NOW = 0
 
 
+REAL_LOG = "/tmp/ccsproxy.real.log"  # 与 HTTP 代理共用一份私有记录，0600 仅本用户可读
+
+
 def log(tag, msg):
     print("[%s] %s" % (tag, msg), flush=True)  # 只打主机/端口/客户端 IP，不打凭据
+
+
+def note_real(real, shown, kind):
+    """--mask-ip 生效时把真实 IP 追加进 0600 私有文件，只有本用户能排查。"""
+    try:
+        fd = os.open(REAL_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        os.write(fd, ("%s\t%s [%s] <- real %s\n" % (time.strftime("%F %T"), shown, kind, real)).encode())
+        os.close(fd)
+    except OSError:
+        pass
 
 
 def recv_exact(sock, n):
@@ -279,7 +294,10 @@ def do_udp(conn, ip, cfg):
 
 def handle(conn, addr, cfg):
     global NOW
-    ip = addr[0] if addr else "-"
+    real = addr[0] if addr else "-"
+    ip = cfg.mask_ip or real      # 日志对外展示的地址
+    if cfg.mask_ip:
+        note_real(real, ip, "socks5")
     try:
         conn.settimeout(cfg.timeout)
         if not handshake(conn, cfg):
@@ -333,8 +351,9 @@ def serve(cfg):
     ls.bind((cfg.bind, cfg.port))
     ls.listen(128)
     LS = ls
-    log("INFO", "socks5 listening %s:%d token=%s udp-advertise=%s"
-        % (cfg.bind, cfg.port, "on" if cfg.token else "off", cfg.advertise or "auto"))
+    log("INFO", "socks5 listening %s:%d token=%s udp-advertise=%s mask=%s"
+        % (cfg.bind, cfg.port, "on" if cfg.token else "off", cfg.advertise or "auto",
+           cfg.mask_ip or "off"))
     while not SHUTDOWN:
         try:
             conn, addr = ls.accept()
@@ -377,6 +396,7 @@ def parse_args(argv):
     ap.add_argument("--timeout", type=float, default=30.0, help="TCP 超时秒，默认 30")
     ap.add_argument("--udp-bind", default="0.0.0.0", dest="udp_bind", help="UDP relay 绑定地址")
     ap.add_argument("--advertise", default="", help="回给客户端的 UDP relay 地址，默认自动探测")
+    ap.add_argument("--mask-ip", default="", dest="mask_ip", help="日志显示用这个 IP，真实 IP 记到 " + REAL_LOG)
     cfg = ap.parse_args(argv)
     cfg.allow = [x for x in cfg.allow.split(",") if x.strip()]
     if not 0 < cfg.port < 65536:
