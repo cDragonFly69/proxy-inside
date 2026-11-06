@@ -350,6 +350,7 @@ def serve(cfg):
     ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     ls.bind((cfg.bind, cfg.port))
     ls.listen(128)
+    ls.settimeout(0.5)  # accept 带超时，信号到达后及时退出
     LS = ls
     log("INFO", "socks5 listening %s:%d token=%s udp-advertise=%s mask=%s"
         % (cfg.bind, cfg.port, "on" if cfg.token else "off", cfg.advertise or "auto",
@@ -357,6 +358,8 @@ def serve(cfg):
     while not SHUTDOWN:
         try:
             conn, addr = ls.accept()
+        except socket.timeout:
+            continue
         except OSError:
             break
         with LOCK:
@@ -375,13 +378,9 @@ def serve(cfg):
 
 
 def on_signal(signum, frame):
+    """只置退出标志；Linux 上 close 唤不醒阻塞的 accept，靠 accept 超时轮询。"""
     global SHUTDOWN
     SHUTDOWN = True
-    if LS is not None:
-        try:
-            LS.close()
-        except OSError:
-            pass
 
 
 def parse_args(argv):

@@ -41,7 +41,11 @@ if [ "${KILL_OLD:-1}" = "1" ] && command -v pkill >/dev/null 2>&1; then
   # 方括号写法让 pkill 不会匹配到执行它的 shell 自身（命令行里的字面方括号不匹配该正则）
   pkill -f '[c]csproxy[.]py' 2>/dev/null || true
   pkill -f '[s]ocks5udp[.]py' 2>/dev/null || true
-  sleep 0.5
+  sleep 1
+  # 老版本进程可能不响应 SIGTERM（阻塞在 accept 上），强杀兜底
+  pkill -9 -f '[c]csproxy[.]py' 2>/dev/null || true
+  pkill -9 -f '[s]ocks5udp[.]py' 2>/dev/null || true
+  sleep 0.3
 fi
 
 PIDS=""

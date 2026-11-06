@@ -200,13 +200,15 @@ def serve(cfg):
     ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # 退出后端口立即可复用
     ls.bind((cfg.bind, cfg.port))
     ls.listen(256)
+    ls.settimeout(0.5)  # accept 带超时：信号到达后最多 0.5s 退出，端口立即释放
     LS = ls
     log("INFO", "listening %s:%d allow=%s token=%s max-conn=%d timeout=%ss srcip=%s mask=%s" % (
         cfg.bind, cfg.port, ",".join(cfg.allow) or "ALL", "on" if cfg.token else "off",
         cfg.max_conn, cfg.timeout, cfg.srcip or "auto", cfg.mask_ip or "off"))
     while not SHUTDOWN:
         try: conn, addr = ls.accept()
-        except OSError: break  # 监听 socket 被信号处理器关闭
+        except socket.timeout: continue
+        except OSError: break
         with LOCK:
             over = NOW >= cfg.max_conn
             if not over:
@@ -217,11 +219,9 @@ def serve(cfg):
         threading.Thread(target=handle, args=(conn, addr, cfg), daemon=True).start()
 
 def on_signal(signum, frame):
-    """SIGINT/SIGTERM：关监听 socket，accept 立刻抛错退出，端口立即释放。"""
+    """SIGINT/SIGTERM：只置退出标志。Linux 上 close 不会唤醒阻塞中的 accept，靠轮询退出。"""
     global SHUTDOWN
     SHUTDOWN = True
-    try: LS.close()
-    except (OSError, AttributeError): pass
 
 def parse_args(argv):
     ap = argparse.ArgumentParser(prog="ccsproxy.py", description="零依赖 HTTP 正向代理（CONNECT + 普通 HTTP）")
