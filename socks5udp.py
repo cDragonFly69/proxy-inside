@@ -27,7 +27,8 @@ import users as usertable
 
 
 def log(tag, msg):
-    print("[%s] %s" % (tag, msg), flush=True)  # 只打主机/端口/客户端 IP，不打凭据
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    print("%s [%s] %s" % (ts, tag, msg), flush=True)  # 只打主机/端口/客户端 IP，不打凭据
 
 
 def note_real(real, shown, kind):

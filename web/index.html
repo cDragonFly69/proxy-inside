@@ -126,6 +126,19 @@ input:focus,select:focus{border-color:var(--acc)}
       <code>--proxy-user 任意:你的令牌</code>（curl）或把令牌填进密码框。
     </div>
     <div id="cmds"></div>
+    <div style="margin-top:6px;padding-top:14px;border-top:1px solid var(--line)">
+      <div class="tag" style="margin-bottom:8px">
+        <b>GitHub SSH 中转</b>——443 被 SNI 阻断、22 被掐握手时，把 github.com 指到本机中转（只影响这一段，不动其他 Host）
+      </div>
+      <div class="row">
+        <button class="primary" onclick="dl('setup-ssh.sh')">下载 setup-ssh.sh（Linux/macOS）</button>
+        <button onclick="dl('setup-ssh.ps1')">下载 setup-ssh.ps1（Windows）</button>
+        <button onclick="dl('ssh-config')">下载 config（手动放入 ~/.ssh/）</button>
+      </div>
+      <div class="tag" style="margin-top:8px">下载后执行一次即可，命令里已经写死本机地址：</div>
+      <pre style="margin-top:6px">chmod +x setup-ssh.sh && ./setup-ssh.sh
+# 之后 git@github.com:OWNER/REPO.git 自动走中转，不用改 remote</pre>
+    </div>
   </div>
 
   <div class="card">
@@ -315,8 +328,10 @@ function renderCmds(){
      `pip config set global.proxy http://${h}:${hp}`],
     ["SOCKS5（不支持 HTTP 代理的程序）",
      `export ALL_PROXY=socks5h://${h}:${sp}\n# 或 socks5h://${h}:${sp} 填进程序自己的设置`],
-    ["GitHub SSH 中转（443 被阻断时）",
+    ["GitHub SSH 中转（改 remote 方式）",
      `git remote set-url origin ssh://git@${h}:${rp}/OWNER/REPO.git\nssh -o StrictHostKeyChecking=accept-new -p ${rp} git@${h}\ngit push -u origin HEAD`],
+    ["GitHub SSH 中转（写 ~/.ssh/config，remote 不用改）",
+     `# 下载上面的 setup-ssh.sh 执行，效果等价于：\ncat >> ~/.ssh/config <<'EOF'\nHost github.com\n  HostName ${h}\n  Port ${rp}\n  User git\n  ServerAliveInterval 30\nEOF\nchmod 600 ~/.ssh/config\nssh -T git@github.com`],
     ["验证代理是否生效",
      `curl -sS https://api.github.com/zen`],
   ];

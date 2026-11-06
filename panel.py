@@ -398,6 +398,92 @@ def port_overview():
     return ours
 
 
+
+def _ssh_config(jump, rport):
+    return """Host github.com
+  HostName %s
+  Port %d
+  User git
+  ServerAliveInterval 30
+  ServerAliveCountMax 3
+""" % (jump, rport)
+
+
+def _setup_ssh_sh(jump, rport):
+    return """#!/bin/sh
+# 一键把 GitHub 指向本服务器的 SSH 中转（只影响 github.com 这一段）
+set -eu
+JUMP="%s"
+RPORT="%d"
+CFG="$HOME/.ssh/config"
+
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+
+if [ -f "$CFG" ] && grep -qE '^Host[[:space:]]+github\\.com' "$CFG"; then
+    echo "[!] $CFG 里已经有 Host github.com 配置"
+    echo "    备份后手动替换，或用面板给出的内容自己改"
+    echo "    当前文件：$CFG"
+    exit 1
+fi
+
+if [ -f "$CFG" ]; then
+    cp "$CFG" "$CFG.bak.$(date +%%Y%%m%%d%%H%%M%%S)"
+    echo "[i] 已备份原配置"
+fi
+
+cat >> "$CFG" <<EOFCFG
+
+Host github.com
+  HostName $JUMP
+  Port $RPORT
+  User git
+  ServerAliveInterval 30
+  ServerAliveCountMax 3
+EOFCFG
+
+chmod 600 "$CFG"
+echo "[ok] 已写入 $CFG"
+echo
+echo "验证："
+ssh -T -o ConnectTimeout=10 git@github.com || true
+""" % (jump, rport)
+
+
+def _setup_ssh_ps1(jump, rport):
+    return """# 一键把 GitHub 指向本服务器的 SSH 中转（Windows）
+$ErrorActionPreference = "Stop"
+$dir = Join-Path $env:USERPROFILE ".ssh"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$cfg = Join-Path $dir "config"
+
+if ((Test-Path $cfg) -and (Select-String -Path $cfg -Pattern '^Host\\s+github\\.com' -Quiet)) {
+    Write-Host "[!] $cfg 里已经有 Host github.com 配置" -ForegroundColor Yellow
+    Write-Host "    备份后手动替换" -ForegroundColor Yellow
+    exit 1
+}
+
+if (Test-Path $cfg) {
+    Copy-Item $cfg "$cfg.bak" -Force
+    Write-Host "[i] 已备份到 $cfg.bak"
+}
+
+$block = @"
+
+Host github.com
+  HostName %s
+  Port %d
+  User git
+  ServerAliveInterval 30
+  ServerAliveCountMax 3
+"@
+Add-Content -Path $cfg -Value $block -Encoding ASCII
+Write-Host "[ok] 已写入 $cfg" -ForegroundColor Green
+Write-Host ""
+Write-Host "验证：ssh -T git@github.com"
+""" % (jump, rport)
+
+
 def check_basic(header):
     if not PANEL_PASS:
         return True
@@ -487,6 +573,12 @@ class Handler(BaseHTTPRequestHandler):
                 body, fname = _sh_off(), "proxy-off.sh"
             elif name == "pac":
                 body, fname = _pac(jump, HTTP_PORT), "proxy.pac"
+            elif name == "ssh-config":
+                body, fname = _ssh_config(jump, RELAY_PORT), "config"
+            elif name == "setup-ssh.sh":
+                body, fname = _setup_ssh_sh(jump, RELAY_PORT), "setup-ssh.sh"
+            elif name == "setup-ssh.ps1":
+                body, fname = _setup_ssh_ps1(jump, RELAY_PORT), "setup-ssh.ps1"
             else:
                 return self._send(404, {"error": "not found"})
             return self._send(200, body, "text/plain; charset=utf-8",

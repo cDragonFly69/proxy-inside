@@ -90,6 +90,9 @@ PAC 不携带令牌，所以对所有人可读；它只是个分流规则。
 - **接入说明**：点一下生成带当前主机地址和令牌的 Markdown，直接发给同事
 - **免密设备**：把 IP/CIDR 加进可信名单，该 IP 不用令牌；配套下载一键开关系统的 bat/sh
 - **PAC**：`/proxy.pac` 自动分流，内网直连、外网走代理
+- **SSH 一键配置**：下载 `setup-ssh.sh` / `setup-ssh.ps1` 执行一次，就把 `github.com`
+  指到本机 2222 中转（只写 `Host github.com` 这一段，不动你已有的其他 Host，
+  重复执行会提示而不覆盖）
 - **端口视图**：本服务四个端口各自跑什么、协议、用途、当前是否在监听；
   外加本机所有监听端口一览，标出哪些属于本服务
 
@@ -118,7 +121,7 @@ python3 panel.py                              # 想要面板就再起这个
 ```
 [INFO] listening 0.0.0.0:18081 allow=ALL token=on(3) max-conn=200 timeout=30.0s
 [INFO] socks5 listening 0.0.0.0:18082 token=on(3) udp-advertise=auto
-[CONNECT] api.github.com:443 <- 10.8.35.107 [alice]
+2026-11-06 17:37:22 [CONNECT] api.github.com:443 <- 10.8.35.107 [alice]
 [UDP] associate 10.200.1.26:52341 <- 10.8.35.107 [alice]
 ```
 
@@ -255,9 +258,21 @@ socks5h://JUMP:18082   用户名任意，密码 <你的token>
 ```
 
 **③ GitHub SSH 中转**
+
+面板「代理命令」里有三个下载：`setup-ssh.sh`（Linux/macOS）、`setup-ssh.ps1`（Windows）、
+`config`（手动放进 `~/.ssh/`）。跑一次脚本就行，`git@github.com:...` 自动走中转，
+remote 都不用改：
+
+```bash
+chmod +x setup-ssh.sh && ./setup-ssh.sh
+ssh -T git@github.com          # 应回 Hi <用户名>!
+```
+
+不想改全局配置，也可以只改单个仓库：
+
 ```bash
 git remote set-url origin ssh://git@JUMP:2222/OWNER/REPO.git
-ssh -o StrictHostKeyChecking=accept-new -p 2222 git@JUMP   # 应回 Hi <用户名>!
+ssh -o StrictHostKeyChecking=accept-new -p 2222 git@JUMP
 git push -u origin HEAD
 ```
 

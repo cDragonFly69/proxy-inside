@@ -22,7 +22,8 @@ REAL_LOG = "/tmp/ccsproxy.real.log"  # 伪装模式下真实 IP 的私有记录�
 
 
 def log(tag, msg):
-    print("[%s] %s" % (tag, msg), flush=True)  # 只打元信息，绝不打印头部/body/Cookie/Token
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    print("%s [%s] %s" % (ts, tag, msg), flush=True)  # 只打元信息，绝不打印头部/body/Cookie/Token
 
 
 def note_real(real, shown):
