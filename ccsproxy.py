@@ -33,8 +33,9 @@ def note_real(real, shown):
 
 def fail(conn, code, reason, ip, msg):
     """回一个无 body 的错误状态行 + 打一行 ERR 日志（不回显任何敏感内容）。"""
+    hdr = "Proxy-Authenticate: Basic realm=\"ccsproxy\"\r\n" if code == 407 else ""  # 缺它 curl/git 不会重试
     try:
-        conn.sendall(("HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" % (code, reason)).encode("latin-1"))
+        conn.sendall(("HTTP/1.1 %d %s\r\n%sContent-Length: 0\r\nConnection: close\r\n\r\n" % (code, reason, hdr)).encode("latin-1"))
         conn.close()  # 错误响应发完即关
     except OSError:
         pass
@@ -200,8 +201,7 @@ def serve(cfg):
     global LS, NOW
     ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # 退出后端口立即可复用
-    ls.bind((cfg.bind, cfg.port))
-    ls.listen(256)
+    ls.bind((cfg.bind, cfg.port)); ls.listen(256)
     ls.settimeout(0.5)  # accept 带超时：信号到达后最多 0.5s 退出，端口立即释放
     LS = ls
     log("INFO", "listening %s:%d allow=%s token=%s max-conn=%d timeout=%ss srcip=%s mask=%s" % (
