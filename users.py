@@ -120,3 +120,100 @@ def read_all(path):
                 "enabled": bool(u.get("enabled", True)),
             })
     return out
+
+
+# ---------------------------------------------------------------- 可信客户端
+
+_tips = {"path": None, "mtime": 0.0, "set": frozenset()}
+
+
+def load_trusted(path):
+    """读取免认证的客户端 IP 列表（trusted.json）。
+
+        {"ips": ["10.8.35.107", "10.8.35.108"]}
+
+    支持单 IP 和 CIDR（如 10.8.35.0/24）。文件按 mtime 热加载。
+    """
+    if not path:
+        return frozenset()
+    try:
+        st = os.stat(path)
+    except OSError:
+        return frozenset()
+    if _tips["path"] == path and _tips["mtime"] == st.st_mtime:
+        return _tips["set"]
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return _tips["set"] if _tips["path"] == path else frozenset()
+    items = set()
+    for x in data.get("ips") or []:
+        if isinstance(x, str) and x.strip():
+            items.add(x.strip())
+    frozen = frozenset(items)
+    _tips.update(path=path, mtime=st.st_mtime, set=frozen)
+    return frozen
+
+
+def _ip4_to_int(text):
+    parts = text.split(".")
+    if len(parts) != 4:
+        return None
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if any(n < 0 or n > 255 for n in nums):
+        return None
+    return (nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3]
+
+
+def ip_trusted(client_ip, path):
+    """判断客户端 IP 是否在免认证名单里（支持 CIDR）。"""
+    table = load_trusted(path)
+    if not table or not client_ip:
+        return False
+    if client_ip in table:
+        return True
+    val = _ip4_to_int(client_ip)
+    if val is None:
+        return False
+    for item in table:
+        if "/" not in item:
+            continue
+        base, _, bits = item.partition("/")
+        try:
+            bits = int(bits)
+        except ValueError:
+            continue
+        if not 0 <= bits <= 32:
+            continue
+        base_val = _ip4_to_int(base)
+        if base_val is None:
+            continue
+        mask = (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF if bits else 0
+        if (val & mask) == (base_val & mask):
+            return True
+    return False
+
+
+def read_trusted(path):
+    """面板用：返回原始字符串列表。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    return [str(x) for x in (data.get("ips") or []) if isinstance(x, str)]
+
+
+def write_trusted(path, ips):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"ips": list(ips)}, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass

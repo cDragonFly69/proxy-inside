@@ -74,6 +74,37 @@ input:focus,select:focus{border-color:var(--acc)}
   </div>
 
   <div class="card">
+    <h2>我的设备（免密接入）</h2>
+    <div class="row">
+      <span class="tag">面板看到的你的 IP：</span>
+      <code id="myIp">-</code>
+      <button class="primary" onclick="trustMe()">加入可信名单</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <input id="newIp" placeholder="或手填 IP / CIDR，如 10.8.35.0/24" style="flex:1;min-width:220px">
+      <button onclick="addIp()">添加</button>
+    </div>
+    <table style="margin-bottom:14px">
+      <thead><tr><th>可信 IP</th><th style="width:1%">操作</th></tr></thead>
+      <tbody id="trustList"></tbody>
+    </table>
+    <div class="tag" style="margin-bottom:8px">
+      名单内的 IP 访问代理<b>不需要令牌</b>。内网可信环境用；公网机器别加。
+    </div>
+    <div class="row">
+      <button onclick="dl('on.bat')">下载 Windows 开启</button>
+      <button onclick="dl('off.bat')">下载 Windows 关闭</button>
+      <button onclick="dl('on.sh')">下载 Linux/macOS 开启</button>
+      <button onclick="dl('off.sh')">下载 Linux/macOS 关闭</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <span class="tag">浏览器自动分流（PAC，填进系统代理设置）：</span>
+      <code id="pacUrl">-</code>
+      <button onclick="copyPac()">复制</button>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>用户与令牌</h2>
     <div class="row">
       <input id="newName" placeholder="用户名，如 zhangsan" style="flex:1;min-width:160px">
@@ -183,6 +214,54 @@ async function all(action){
   }catch(e){ toast("失败：" + e.message, true); }
 }
 
+async function loadTrust(){
+  try{
+    const d = await api("/api/trust");
+    $("#myIp").textContent = d.client_ip || "-";
+    $("#trustList").innerHTML = d.ips.map(ip => `
+      <tr><td><code>${ip}</code></td>
+          <td><button class="danger" onclick="delIp('${ip}')">移除</button></td></tr>
+    `).join("") || `<tr><td colspan="2" class="tag">名单为空，所有请求都要令牌</td></tr>`;
+  }catch(e){ /* 静默 */ }
+}
+
+async function trustMe(){
+  const ip = $("#myIp").textContent.trim();
+  if (!ip || ip === "-") return toast("拿不到你的 IP", true);
+  await postTrust("add", ip);
+}
+
+async function addIp(){
+  const v = $("#newIp").value.trim();
+  if (!v) return toast("先填 IP", true);
+  await postTrust("add", v);
+  $("#newIp").value = "";
+}
+
+async function delIp(ip){ await postTrust("delete", ip); }
+
+async function postTrust(action, ip){
+  try{
+    await api("/api/trust", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({action, ip})
+    });
+    toast(action === "add" ? ("已加入 " + ip) : ("已移除 " + ip));
+    loadTrust();
+  }catch(e){ toast("失败：" + e.message, true); }
+}
+
+function dl(name){
+  window.location.href = "/api/client/" + name;
+}
+
+function copyPac(){
+  const u = $("#pacUrl").textContent;
+  navigator.clipboard.writeText(u)
+    .then(() => toast("已复制：" + u))
+    .catch(() => toast("复制失败，手动选中", true));
+}
+
 async function loadUsers(){
   const d = await api("/api/users");
   $("#users").innerHTML = d.users.map(u => `
@@ -250,7 +329,9 @@ function copyDoc(){
     .catch(() => toast("复制失败，手动选中", true));
 }
 
-function refreshAll(){ loadStatus(); loadUsers(); }
+function refreshAll(){ loadStatus(); loadUsers(); loadTrust(); }
+
+$("#pacUrl").textContent = location.origin + "/proxy.pac";
 
 refreshAll();
 setInterval(loadStatus, 3000);

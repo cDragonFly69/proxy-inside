@@ -71,14 +71,20 @@ def host_allowed(host, allow):
                for d in (x.lower().strip().rstrip(".") for x in allow) if d)
 
 
-def handshake(conn, cfg):
-    """SOCKS5 握手。成功返回用户名（无认证时为 "anon"），失败返回 None。"""
+def handshake(conn, cfg, trusted=False):
+    """SOCKS5 握手。成功返回用户名（"anon"/"trusted"），失败返回 None。"""
     head = recv_exact(conn, 2)
     if not head or head[0] != 5:
         return None
     methods = recv_exact(conn, head[1])
     if methods is None:
         return None
+    if trusted:      # 免认证 IP 名单命中
+        if 0 not in methods:
+            conn.sendall(b"\x05\xff")
+            return None
+        conn.sendall(b"\x05\x00")
+        return "trusted"
     auth_on = bool(cfg.token or cfg.users)
     if not auth_on:  # 完全不认证
         if 0 not in methods:
@@ -314,11 +320,11 @@ def handle(conn, addr, cfg):
         note_real(real, ip, "socks5")
     try:
         conn.settimeout(cfg.timeout)
-        who = handshake(conn, cfg)
+        who = handshake(conn, cfg, usertable.ip_trusted(real, cfg.trust))
         if who is None:
             log("ERR", "handshake failed <- %s" % ip)
             return
-        tag = "" if who in ("anon", "relax") else " [%s]" % who
+        tag = "" if who in ("anon", "relax", "trusted") else " [%s]" % who
         req = read_request(conn)
         if not req:
             reply(conn, 1)
@@ -406,6 +412,7 @@ def parse_args(argv):
     ap.add_argument("bind", nargs="?", default="0.0.0.0", help="监听地址，默认 0.0.0.0")
     ap.add_argument("--token", default="", help="用户名/密码认证的密码部分（空=不认证）")
     ap.add_argument("--users", default="", help="多用户令牌表 users.json；与 --token 可并存")
+    ap.add_argument("--trust", default="", help="免认证客户端 IP 名单 trusted.json（支持 CIDR）")
     ap.add_argument("--user", default="ccs", help="认证用户名，默认 ccs")
     ap.add_argument("--allow", default="", help="目标白名单，逗号分隔（后缀匹配），空=不限")
     ap.add_argument("--max-conn", type=int, default=200, dest="max_conn", help="并发上限，默认 200")

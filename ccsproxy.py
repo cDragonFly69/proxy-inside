@@ -147,7 +147,9 @@ def handle(conn, addr, cfg):
             return fail(conn, 400, "Bad Request", ip, "400 bad request")
         method, target, version, headers = parsed
         who = ""
-        if cfg.token or cfg.users:  # 单令牌或 users.json 多用户；Bearer 与 Basic(user:token) 都认
+        if usertable.ip_trusted(real, cfg.trust):
+            who = "trusted"          # 免认证 IP 名单命中，直接放行
+        elif cfg.token or cfg.users:  # 单令牌或 users.json 多用户；Bearer 与 Basic(user:token) 都认
             auth = next((v for k, v in headers if k.lower() == "proxy-authorization"), "").strip()
             who = usertable.pick(auth, cfg.token, cfg.users) or ""
             if not who:
@@ -231,6 +233,7 @@ def parse_args(argv):
     ap.add_argument("--allow", default="", help="目标白名单，逗号分隔（后缀匹配），空=不限")
     ap.add_argument("--token", default="", help="要求 Proxy-Authorization: Bearer <token>")
     ap.add_argument("--users", default="", help="多用户令牌表 users.json；与 --token 可并存")
+    ap.add_argument("--trust", default="", help="免认证客户端 IP 名单 trusted.json（支持 CIDR）")
     ap.add_argument("--max-conn", type=int, default=200, dest="max_conn", help="并发上限，默认 200")
     ap.add_argument("--timeout", type=float, default=30.0, help="连接/读写超时秒，默认 30")
     ap.add_argument("--srcip", default="", help="出站源地址绑定（多网卡出口 IP），默认系统选路")

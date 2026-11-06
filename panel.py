@@ -25,9 +25,12 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+import users as usertable
+
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("DATA_DIR") or os.path.join(DIR, "data")
 USERS_FILE = os.path.join(DATA, "users.json")
+TRUST_FILE = os.path.join(DATA, "trusted.json")
 LOG_DIR = os.path.join(DATA, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -96,12 +99,12 @@ def build_services():
 
     http_cmd = [py, os.path.join(DIR, "ccsproxy.py"), str(HTTP_PORT), BIND] + common + allow
     socks_cmd = [py, os.path.join(DIR, "socks5udp.py"), str(SOCKS_PORT), BIND] + common + allow
-    socks_cmd += ["--users", USERS_FILE]
+    socks_cmd += ["--users", USERS_FILE, "--trust", TRUST_FILE]
     if TOKEN:
         socks_cmd += ["--token", TOKEN]
     if RELAX_AUTH == "1":
         socks_cmd += ["--relax-auth"]
-    http_cmd += ["--users", USERS_FILE]
+    http_cmd += ["--users", USERS_FILE, "--trust", TRUST_FILE]
     if TOKEN:
         http_cmd += ["--token", TOKEN]
 
@@ -190,6 +193,103 @@ def tail_log(name, lines=200):
 
 
 # ---------------------------------------------------------------- HTTP 层
+
+def _client_ip_of(handler):
+    try:
+        return handler.client_address[0]
+    except Exception:
+        return ""
+
+
+def _my_ip(handler):
+    """面板看到的客户端地址（写进一键脚本，让脚本指向正确的服务器）。"""
+    host = (handler.headers.get("Host") or "").split(":")[0]
+    if host and host not in ("127.0.0.1", "localhost"):
+        return host
+    return handler.headers.get("X-Forwarded-Host", "").split(":")[0] or "127.0.0.1"
+
+
+def _win_on(jump, hport):
+    return r'''@echo off
+chcp 65001 >nul
+setlocal
+set "JUMP=__JUMP__"
+set "PPORT=__PPORT__"
+set "KEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+
+echo 代理地址 %JUMP%:%PPORT%
+echo 添加到可信列表后无需密码；若提示认证，用面板里你的令牌。
+echo.
+
+reg add "%KEY%" /v ProxyEnable /t REG_DWORD /d 1 /f >nul
+reg add "%KEY%" /v ProxyServer /t REG_SZ /d "%JUMP%:%PPORT%" /f >nul
+reg add "%KEY%" /v ProxyOverride /t REG_SZ /d "10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.2*;172.30.*;172.31.*;192.168.*;*.local;<local>" /f >nul
+
+powershell -NoProfile -Command "$src='[DllImport(\"wininet.dll\")]public static extern bool InternetSetOption(IntPtr h,int o,IntPtr b,int l);';$t=Add-Type -MemberDefinition $src -Name W -Namespace W -PassThru;$t::InternetSetOption([IntPtr]::Zero,39,[IntPtr]::Zero,0)|Out-Null;$t::InternetSetOption([IntPtr]::Zero,37,[IntPtr]::Zero,0)|Out-Null" 2>nul
+
+echo.
+echo [完成] 系统代理已开启。浏览器 / curl / git(https) 现在都走 %JUMP%
+echo 验证：curl.exe --ssl-no-revoke https://api.github.com/zen
+echo 关闭：双击 proxy-off.bat
+echo.
+pause
+'''.replace("__JUMP__", jump).replace("__PPORT__", str(hport))
+
+
+def _win_off():
+    return r'''@echo off
+chcp 65001 >nul
+setlocal
+set "KEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+
+reg add "%KEY%" /v ProxyEnable /t REG_DWORD /d 0 /f >nul
+
+powershell -NoProfile -Command "$src='[DllImport(\"wininet.dll\")]public static extern bool InternetSetOption(IntPtr h,int o,IntPtr b,int l);';$t=Add-Type -MemberDefinition $src -Name W -Namespace W -PassThru;$t::InternetSetOption([IntPtr]::Zero,39,[IntPtr]::Zero,0)|Out-Null;$t::InternetSetOption([IntPtr]::Zero,37,[IntPtr]::Zero,0)|Out-Null" 2>nul
+
+echo 系统代理已关闭。
+pause
+'''
+
+
+def _sh_on(jump, hport):
+    return '''#!/bin/sh
+# 用法： . ./proxy-on.sh   （必须 source，否则只影响子进程）
+export http_proxy="http://__JUMP__:__PPORT__"
+export https_proxy="$http_proxy"
+export HTTP_PROXY="$http_proxy"
+export HTTPS_PROXY="$http_proxy"
+export no_proxy="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,*.local"
+echo "代理已启用：$http_proxy"
+echo "验证：curl -sS https://api.github.com/zen"
+echo "关闭： . ./proxy-off.sh"
+'''.replace("__JUMP__", jump).replace("__PPORT__", str(hport))
+
+
+def _sh_off():
+    return '''#!/bin/sh
+# 用法： . ./proxy-off.sh
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy
+echo "代理已关闭"
+'''
+
+
+def _pac(jump, hport):
+    return '''function FindProxyForURL(url, host) {
+    if (isPlainHostName(host) ||
+        dnsDomainIs(host, ".local") ||
+        shExpMatch(host, "10.*") ||
+        shExpMatch(host, "192.168.*") ||
+        shExpMatch(host, "172.1[6-9].*") ||
+        shExpMatch(host, "172.2[0-9].*") ||
+        shExpMatch(host, "172.30.*") ||
+        shExpMatch(host, "172.31.*")) {
+        return "DIRECT";
+    }
+    return "PROXY __JUMP__:__PPORT__; DIRECT";
+}
+'''.replace("__JUMP__", jump).replace("__PPORT__", str(hport))
+
+
 def check_basic(header):
     if not PANEL_PASS:
         return True
@@ -249,8 +349,34 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path in ("/", "/index.html"):
             return self._page()
+        if path == "/proxy.pac":
+            return self._send(200, _pac(_my_ip(self), HTTP_PORT),
+                              "application/x-ns-proxy-autoconfig; charset=utf-8")
         if not check_basic(self.headers.get("Authorization")):
             return self._deny()
+
+        if path == "/api/trust":
+            return self._send(200, {
+                "ips": usertable.read_trusted(TRUST_FILE),
+                "client_ip": _client_ip_of(self),
+            })
+        if path.startswith("/api/client/"):
+            jump = _my_ip(self)
+            name = path.rsplit("/", 1)[-1]
+            if name == "on.bat":
+                body, fname = _win_on(jump, HTTP_PORT), "proxy-on.bat"
+            elif name == "off.bat":
+                body, fname = _win_off(), "proxy-off.bat"
+            elif name == "on.sh":
+                body, fname = _sh_on(jump, HTTP_PORT), "proxy-on.sh"
+            elif name == "off.sh":
+                body, fname = _sh_off(), "proxy-off.sh"
+            elif name == "pac":
+                body, fname = _pac(jump, HTTP_PORT), "proxy.pac"
+            else:
+                return self._send(404, {"error": "not found"})
+            return self._send(200, body, "text/plain; charset=utf-8",
+                              {"Content-Disposition": 'attachment; filename="%s"' % fname})
 
         if path == "/api/status":
             return self._send(200, {
@@ -333,6 +459,26 @@ class Handler(BaseHTTPRequestHandler):
                         u["token"] = tok
                 write_users(users)
                 return self._send(200, {"ok": True, "token": tok, "users": users})
+            return self._send(400, {"error": "unknown action"})
+
+        if path == "/api/trust":
+            ips = usertable.read_trusted(TRUST_FILE)
+            action = body.get("action")
+            val = (body.get("ip") or "").strip()
+            if action == "add":
+                if not val:
+                    return self._send(400, {"error": "ip required"})
+                if val not in ips:
+                    ips.append(val)
+                    usertable.write_trusted(TRUST_FILE, ips)
+                return self._send(200, {"ok": True, "ips": ips})
+            if action == "delete":
+                ips = [x for x in ips if x != val]
+                usertable.write_trusted(TRUST_FILE, ips)
+                return self._send(200, {"ok": True, "ips": ips})
+            if action == "clear":
+                usertable.write_trusted(TRUST_FILE, [])
+                return self._send(200, {"ok": True, "ips": []})
             return self._send(400, {"error": "unknown action"})
 
         if path == "/api/all":
