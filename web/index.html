@@ -74,6 +74,21 @@ input:focus,select:focus{border-color:var(--acc)}
   </div>
 
   <div class="card">
+    <h2>端口与服务</h2>
+    <table style="margin-bottom:16px">
+      <thead>
+        <tr><th style="width:90px">端口</th><th>服务</th><th>协议</th><th>用途</th><th style="width:70px">状态</th></tr>
+      </thead>
+      <tbody id="svcPorts"></tbody>
+    </table>
+    <div class="row" style="margin-bottom:8px">
+      <span class="tag" style="flex:1">本机正在监听的端口 <b id="listenCount">-</b> 个</span>
+      <button onclick="loadPorts()">刷新</button>
+    </div>
+    <div id="listenList" style="max-height:260px;overflow:auto"></div>
+  </div>
+
+  <div class="card">
     <h2>我的设备（免密接入）</h2>
     <div class="row">
       <span class="tag">面板看到的你的 IP：</span>
@@ -329,6 +344,41 @@ function copyCmd(i){
     .catch(() => toast("复制失败，手动选中", true));
 }
 
+async function loadPorts(){
+  try{
+    const d = await api("/api/ports");
+    const mine = new Set(d.services.map(x => x.port));
+
+    $("#svcPorts").innerHTML = d.services.map(x => `
+      <tr>
+        <td><code>${x.port}</code></td>
+        <td>${x.label}</td>
+        <td class="tag">${x.proto}</td>
+        <td class="tag">${x.purpose}</td>
+        <td>${x.listening
+          ? '<span style="color:var(--ok)">监听中</span>'
+          : '<span style="color:var(--dim)">未监听</span>'}</td>
+      </tr>`).join("");
+
+    const others = d.listeners.filter(x => !mine.has(x.port));
+    $("#listenCount").textContent = d.listeners.length;
+    $("#listenList").innerHTML = `
+      <table>
+        <thead><tr><th style="width:90px">端口</th><th>监听地址</th><th style="width:70px">归属</th></tr></thead>
+        <tbody>
+          ${d.listeners.map(x => `
+            <tr>
+              <td><code>${x.port}</code></td>
+              <td class="tag">${x.addrs.join(", ")}</td>
+              <td>${mine.has(x.port)
+                ? '<span style="color:var(--ok)">本服务</span>'
+                : '<span class="tag">其他</span>'}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  }catch(e){ toast("端口信息读取失败：" + e.message, true); }
+}
+
 async function loadUsers(){
   const d = await api("/api/users");
   $("#users").innerHTML = d.users.map(u => `
@@ -396,7 +446,7 @@ function copyDoc(){
     .catch(() => toast("复制失败，手动选中", true));
 }
 
-function refreshAll(){ loadStatus(); loadUsers(); loadTrust(); loadEnv(); }
+function refreshAll(){ loadStatus(); loadUsers(); loadTrust(); loadEnv(); loadPorts(); }
 
 $("#pacUrl").textContent = location.origin + "/proxy.pac";
 

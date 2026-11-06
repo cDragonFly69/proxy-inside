@@ -290,6 +290,114 @@ def _pac(jump, hport):
 '''.replace("__JUMP__", jump).replace("__PPORT__", str(hport))
 
 
+
+# ---------------------------------------------------------------- 端口探测
+SERVICE_PORTS = [
+    ("panel", "管理面板", "HTTP", "启停服务 / 发令牌 / 看日志"),
+    ("http", "HTTP 代理", "HTTP CONNECT", "curl · git https · 浏览器"),
+    ("socks", "SOCKS5", "SOCKS5 + UDP", "TUN 客户端 · UDP 应用"),
+    ("relay", "GitHub SSH 中转", "TCP 透传", "git push over SSH"),
+]
+
+
+def _hex_ip4(h):
+    try:
+        b = bytes.fromhex(h)
+        return ".".join(str(x) for x in b[::-1])
+    except Exception:
+        return h
+
+
+def _hex_ip6(h):
+    try:
+        b = bytes.fromhex(h)
+        groups = ["%02x%02x" % (b[i], b[i + 1]) for i in range(0, 16, 2)]
+        # 简化：折叠全零
+        text = ":".join(groups)
+        if text == "0000:0000:0000:0000:0000:0000:0000:0000":
+            return "::"
+        if text == "0000:0000:0000:0000:0000:0000:0000:0001":
+            return "::1"
+        return text
+    except Exception:
+        return h
+
+
+def listen_ports():
+    """读 /proc/net/tcp{,6} 的 LISTEN 套接字（st == 0A）。
+
+    host 网络模式下这就是整台服务器的监听列表；
+    bridge 模式下只显示容器自己的。
+    """
+    found = {}
+    for path, fam, conv in (("/proc/net/tcp", 4, _hex_ip4),
+                            ("/proc/net/tcp6", 6, _hex_ip6)):
+        try:
+            with open(path, encoding="ascii", errors="replace") as f:
+                next(f)
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 4 or parts[3] != "0A":
+                        continue
+                    try:
+                        addr_hex, port_hex = parts[1].rsplit(":", 1)
+                        port = int(port_hex, 16)
+                    except ValueError:
+                        continue
+                    item = found.setdefault(port, {"port": port, "addrs": [], "fams": []})
+                    ip = conv(addr_hex)
+                    if ip not in item["addrs"]:
+                        item["addrs"].append(ip)
+                    if fam not in item["fams"]:
+                        item["fams"].append(fam)
+        except OSError:
+            continue
+    if not found:                       # 非 Linux（macOS 本地开发）退回 lsof
+        found = _listen_via_lsof()
+    return [found[k] for k in sorted(found)]
+
+
+def _listen_via_lsof():
+    try:
+        raw = subprocess.run(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"],
+                             capture_output=True, timeout=5).stdout
+        out = raw.decode("utf-8", "replace")   # 进程名可能是 GBK，不能硬解
+    except Exception:
+        return {}
+    ports = {}
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 9:
+            continue
+        name = parts[8].replace("(LISTEN)", "").strip()
+        if ":" not in name:
+            continue
+        addr, _, port_s = name.rpartition(":")
+        try:
+            port = int(port_s)
+        except ValueError:
+            continue
+        item = ports.setdefault(port, {"port": port, "addrs": [], "fams": [4]})
+        addr = addr.strip("[]") or "*"
+        if addr not in item["addrs"]:
+            item["addrs"].append(addr)
+    return ports
+
+
+def port_overview():
+    listening = {x["port"] for x in listen_ports()}
+    ours = []
+    for key, label, proto, purpose in SERVICE_PORTS:
+        port = PANEL_PORT if key == "panel" else (
+            HTTP_PORT if key == "http" else SOCKS_PORT if key == "socks" else RELAY_PORT)
+        ours.append({
+            "key": key, "port": port, "label": label, "proto": proto,
+            "purpose": purpose, "listening": port in listening,
+            "container_port": port,
+        })
+    return ours
+
+
 def check_basic(header):
     if not PANEL_PASS:
         return True
@@ -355,6 +463,12 @@ class Handler(BaseHTTPRequestHandler):
         if not check_basic(self.headers.get("Authorization")):
             return self._deny()
 
+        if path == "/api/ports":
+            return self._send(200, {
+                "services": port_overview(),
+                "listeners": listen_ports(),
+                "host_network": os.environ.get("HOST_NETWORK", "") == "1",
+            })
         if path == "/api/trust":
             return self._send(200, {
                 "ips": usertable.read_trusted(TRUST_FILE),
