@@ -98,6 +98,10 @@ SERVER=10.200.1.26 SOCKS_PORT=18082 TOKEN=s3cret HTTP_PORT=18090 sh make-bundle.
 `client-bundle.tgz` 解包（不再访问 github.com），然后起 TUN。
 起来后整机流量（含 UDP）走跳板机，UU 远程、浏览器、git 全都通。
 
+**TUN 客户端的 DNS 必须走系统内网 DNS**：配置里用 `{"type": "local"}`。
+实测经 SOCKS5 转发到 `8.8.8.8:53` 的查询在被管控的出口上全部 `context deadline
+exceeded`，表现是所有域名解析失败、`sing-box` 日志刷满 `dns: exchange failed`。
+
 **UDP relay 地址必须对**：跳板机有多网卡（docker0 之类）时自动探测可能选错，导致 TCP 通、UDP 不通。
 启动跳板机时显式指定：
 
@@ -112,6 +116,37 @@ curl.exe --ssl-no-revoke https://ifconfig.me
 ```
 
 应该回显跳板机的出口 IP。
+
+## GitHub SSH 中转（出口被管控时）
+
+内网出口常按域名白名单放行：`api.github.com:443` 通，但 `github.com:443` 的 TLS 会被
+RST（`SSL routines::unexpected eof`），`github.com:22` 的 SSH 握手也会被掐
+（`Connection closed by 20.205.243.166 port 22`）。网页上传、`git push https://`、
+`git clone` 全都走不通。
+
+跳板机到 `github.com:22` 是通的，所以在**跳板机**上起一个 TCP 中转：
+
+```bash
+sh gh-relay.sh -d      # 后台常驻，监听 0.0.0.0:2222
+sh gh-relay.sh -k      # 停止
+sh gh-relay.sh         # 前台调试，Ctrl+C 停
+```
+
+内网机器上改用中转地址：
+
+```bash
+git remote set-url origin ssh://git@JUMP_HOST:2222/OWNER/REPO.git
+ssh -o StrictHostKeyChecking=accept-new -p 2222 git@JUMP_HOST   # 应回 Hi <用户名>!
+git push -u origin HEAD
+```
+
+环境变量：`GH_RELAY_PORT`（默认 2222）、`GH_RELAY_BIND`（默认 `0.0.0.0`）、
+`GH_RELAY_UPSTREAM`（默认 `github.com:22`）。
+
+已验证输出：`Hi cDragonFly69! You've successfully authenticated, but GitHub does not
+provide shell access.`
+
+> SSH 不是 TLS，没有 SNI 可拦，所以这条路能过；HTTPS 那条不行，不用再试。
 
 ## 参数
 
