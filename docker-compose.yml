@@ -26,6 +26,9 @@ services:
       RELAX_AUTH: ${RELAX_AUTH:-1}
       # GitHub SSH 中转的上游
       GH_RELAY_UPSTREAM: ${GH_RELAY_UPSTREAM:-github.com:22}
+    # 以宿主机用户的 uid/gid 运行，避免容器往 ./data 写出 root 属主的文件，
+    # 导致下次 start.sh 检查「目录不可写」而拒绝启动。start.sh 会写入 HOST_UID/HOST_GID。
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
     volumes:
       - ./data:/data
     # UDP relay 用随机端口；要用 UDP（UU 远程 / TUN 客户端）必须 host 网络：

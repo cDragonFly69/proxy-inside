@@ -89,6 +89,10 @@ ensure_env() {
   if [ -f .env ]; then
     # shellcheck disable=SC1091
     . ./.env
+    if ! grep -q '^HOST_UID=' .env 2>/dev/null; then
+      printf 'HOST_UID=%s\nHOST_GID=%s\n' "$(id -u)" "$(id -g)" >> .env
+      HOST_UID=$(id -u); HOST_GID=$(id -g)
+    fi
     return
   fi
   PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)
@@ -96,6 +100,8 @@ ensure_env() {
   cat > .env <<EOF
 PANEL_USER=admin
 PANEL_PASS=$PASS
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
 EOF
   chmod 600 .env
   log "首次运行，已生成 .env（面板密码：${PASS}）"
@@ -125,7 +131,13 @@ do_up() {
   done
 
   mkdir -p "$DIR/data" || die "无法创建 $DIR/data"
-  [ -w "$DIR/data" ] || die "$DIR/data 不可写，检查目录权限"
+  if [ ! -w "$DIR/data" ]; then
+    warn "$DIR/data 不可写（属主可能是 root，上一次容器以 root 建出来的）"
+    warn "修一下属主再启动，任选一条："
+    warn "  sudo chown -R $(id -u):$(id -g) $DIR/data"
+    warn "  docker run --rm -v \"$DIR:/w\" alpine chown -R $(id -u):$(id -g) /w/data"
+    die "权限未修复，停止启动"
+  fi
 
   log "构建镜像"
   $COMPOSE build
