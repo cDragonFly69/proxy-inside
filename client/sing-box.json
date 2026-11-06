@@ -38,6 +38,7 @@
       { "ip_is_private": true, "outbound": "direct" }
     ],
     "final": "proxy",
-    "auto_detect_interface": true
+    "auto_detect_interface": true,
+    "default_domain_resolver": "local"
   }
 }
