@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """ccsproxy.py — 零依赖 HTTP 正向代理（CONNECT + 普通 HTTP）。python3 ccsproxy.py [port] [bind_host] [--allow a,b] [--token T] [--mask-ip IP]"""
 import argparse
+import base64
 import os
 import signal
 import socket
@@ -26,8 +27,7 @@ def note_real(real, shown):
     """--mask-ip 生效时把真实 IP 追加进 0600 私有文件，只有本用户能排查。"""
     try:
         fd = os.open(REAL_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        os.write(fd, ("%s\t%s <- real %s\n" % (time.strftime("%F %T"), shown, real)).encode())
-        os.close(fd)
+        os.write(fd, ("%s\t%s <- real %s\n" % (time.strftime("%F %T"), shown, real)).encode()); os.close(fd)
     except OSError:
         pass
 
@@ -35,11 +35,10 @@ def fail(conn, code, reason, ip, msg):
     """回一个无 body 的错误状态行 + 打一行 ERR 日志（不回显任何敏感内容）。"""
     try:
         conn.sendall(("HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" % (code, reason)).encode("latin-1"))
+        conn.close()  # 错误响应发完即关
     except OSError:
         pass
     log("ERR", "%s <- %s" % (msg, ip))
-    try: conn.close()          # 错误响应发完即关
-    except OSError: pass
 
 def read_header(sock):
     """读到 \\r\\n\\r\\n 为止（容忍分包）；extra 是 TLS ClientHello 或 body 前奏，必须原样透传。"""
@@ -78,8 +77,8 @@ def host_allowed(host, allow):
 
 def split_hostport(target, default_port):
     """拆 host:port / [IPv6]:port；失败返回 (None, None)。"""
-    if target.startswith("[") and "]" not in target: return None, None
     if target.startswith("["):
+        if "]" not in target: return None, None
         host, _, rest = target[1:].partition("]")
         return (host, int(rest[1:])) if rest.startswith(":") and rest[1:].isdigit() else (host, default_port)
     if target.count(":") == 1:
@@ -144,11 +143,15 @@ def handle(conn, addr, cfg):
         if parsed is None:
             return fail(conn, 400, "Bad Request", ip, "400 bad request")
         method, target, version, headers = parsed
-        if cfg.token:  # 令牌校验，不比对明文回显
-            auth = next((v for k, v in headers if k.lower() == "proxy-authorization"), "").strip().lower()
-            if auth != "bearer " + cfg.token.lower():
+        if cfg.token:  # 令牌校验；Bearer 与 Basic(user:token) 都认，git/浏览器/系统代理才能用
+            auth = next((v for k, v in headers if k.lower() == "proxy-authorization"), "").strip()
+            low = auth.lower()          # 只对 scheme 做小写，Base64 部分必须保留原始大小写
+            ok = low == "bearer " + cfg.token.lower()
+            if not ok and low.startswith("basic "):
+                try: ok = base64.b64decode(auth[6:]).decode("utf-8", "replace").split(":", 1)[1] == cfg.token
+                except Exception: ok = False
+            if not ok:
                 return fail(conn, 407, "Proxy Authentication Required", ip, "407 token missing/bad")
-        path = None
         if method.upper() == "CONNECT":
             host, port = split_hostport(target, 443)
         else:  # 普通 HTTP：绝对 URI → origin-form
@@ -190,8 +193,7 @@ def handle(conn, addr, cfg):
         for s in (conn, up):
             try: s and s.close()
             except OSError: pass
-        with LOCK:
-            NOW -= 1
+        with LOCK: NOW -= 1
 
 def serve(cfg):
     """监听循环：accept → 并发上限判断 → 起线程处理。"""
@@ -211,8 +213,7 @@ def serve(cfg):
         except OSError: break
         with LOCK:
             over = NOW >= cfg.max_conn
-            if not over:
-                NOW += 1
+            if not over: NOW += 1
         if over:
             fail(conn, 503, "Service Unavailable", cfg.mask_ip or (addr[0] if addr else "-"), "503 max-conn")
             continue
@@ -242,8 +243,7 @@ def main(argv=None):
     for sig in (signal.SIGINT, signal.SIGTERM): signal.signal(sig, on_signal)
     try: serve(cfg)
     except OSError as e:
-        log("ERR", "listen failed: %s" % e)
-        return 2
+        log("ERR", "listen failed: %s" % e); return 2
     print("bye", flush=True)
 
 if __name__ == "__main__":
