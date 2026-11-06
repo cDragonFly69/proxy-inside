@@ -59,13 +59,23 @@ curl.exe --ssl-no-revoke -L -x http://10.200.1.26:18081 -o out.msi https://githu
 
 **Windows 客户端：sing-box TUN**（`client/` 目录已备好）
 
+> 服务器只是出口。Windows 上不装 TUN 客户端，UU 远程不会自动走这个代理——它不读系统代理，也没有代理设置项。
+
 ```powershell
 # 管理员 PowerShell，在 client 目录下
-.\run-tun.ps1 -Password s3cret
+.\run-tun.ps1 -Check              # 先诊断：管理员/端口/代理/组件
+.\run-tun.ps1 -Password s3cret    # 诊断通过后一键启动
 ```
 
-脚本会自动：下载 `sing-box.exe`（经 18081 的 HTTP 代理）→ 补 `wintun.dll` → 按 `sing-box.json` 生成配置 → 起 TUN。
+脚本会：诊断 → 下载 `sing-box.exe`（锁 v1.11.x，配置格式匹配）→ 补 `wintun.dll` → 生成配置 → 起 TUN。
 起来后整机流量（含 UDP）走跳板机，UU 远程、浏览器、git 全都通。
+
+**UDP relay 地址必须对**：跳板机有多网卡（docker0 之类）时自动探测可能选错，导致 TCP 通、UDP 不通。
+启动跳板机时显式指定：
+
+```bash
+SOCKS_ADVERTISE=10.200.1.26 MASK_IP=10.8.34.61 TOKEN=s3cret sh start.sh
+```
 
 验证出口：
 
