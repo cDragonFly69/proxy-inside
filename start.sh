@@ -17,6 +17,7 @@ TIMEOUT="${TIMEOUT:-30}"
 SRCIP="${SRCIP:-}"
 SOCKS_USER="${SOCKS_USER:-ccs}"       # SOCKS5 认证用户名
 SOCKS_ADVERTISE="${SOCKS_ADVERTISE:-}" # 回给客户端的 UDP relay 地址，空=自动探测
+SOCKS_RELAX_AUTH="${SOCKS_RELAX_AUTH:-1}"  # 1=客户端不支持用户名密码认证时按无认证放行（UU 远程这类）
 MASK_IP="${MASK_IP:-}"                # 日志里展示的客户端 IP（真实 IP 记到 /tmp/ccsproxy.real.log）
 
 # 令牌：优先 TOKEN；否则从 TOKEN_FILE（docker secret / 挂载文件）首行读取
@@ -70,6 +71,7 @@ start_socks() {
   set -- "$SOCKS_PORT" "$BIND" --max-conn "$MAX_CONN" --timeout "$TIMEOUT"
   if [ -n "$ALLOW" ]; then set -- "$@" --allow "$ALLOW"; fi
   if [ -n "$TOKEN" ]; then set -- "$@" --token "$TOKEN" --user "$SOCKS_USER"; fi
+  if [ "$SOCKS_RELAX_AUTH" = 1 ]; then set -- "$@" --relax-auth; fi
   if [ -n "$SOCKS_ADVERTISE" ]; then set -- "$@" --advertise "$SOCKS_ADVERTISE"; fi
   if [ -n "$MASK_IP" ]; then set -- "$@" --mask-ip "$MASK_IP"; fi
   exec python3 "$DIR/socks5udp.py" "$@"

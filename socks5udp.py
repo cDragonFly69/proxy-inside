@@ -83,6 +83,12 @@ def handshake(conn, cfg):
         conn.sendall(b"\x05\x00")
         return True
     if 2 not in methods:
+        # 有些客户端（如 UU 远程）不会用户名/密码认证，只 offer 0x00。
+        # 开 --relax-auth 时按无认证放行，目标仍受 --allow 白名单约束。
+        if cfg.relax_auth and 0 in methods:
+            log("WARN", "client 不支持 RFC1929，按无认证放行（--relax-auth）")
+            conn.sendall(b"\x05\x00")
+            return True
         conn.sendall(b"\x05\xff")
         return False
     conn.sendall(b"\x05\x02")
@@ -396,6 +402,8 @@ def parse_args(argv):
     ap.add_argument("--udp-bind", default="0.0.0.0", dest="udp_bind", help="UDP relay 绑定地址")
     ap.add_argument("--advertise", default="", help="回给客户端的 UDP relay 地址，默认自动探测")
     ap.add_argument("--mask-ip", default="", dest="mask_ip", help="日志显示用这个 IP，真实 IP 记到 " + REAL_LOG)
+    ap.add_argument("--relax-auth", action="store_true", dest="relax_auth",
+                    help="客户端不支持用户名/密码认证时按无认证放行（目标仍受 --allow 约束）")
     cfg = ap.parse_args(argv)
     cfg.allow = [x for x in cfg.allow.split(",") if x.strip()]
     if not 0 < cfg.port < 65536:
