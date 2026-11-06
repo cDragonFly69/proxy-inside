@@ -7,7 +7,7 @@
 | HTTP 正向代理 | TCP（CONNECT 隧道） | 18081 | `curl` / `git https` / 浏览器 / 下文件 |
 | SOCKS5 | TCP + **UDP ASSOCIATE** | 18082 | TUN 客户端、UDP 应用 |
 | GitHub SSH 中转 | TCP 透传 | 2222 | `git push` over SSH（443 被 SNI 阻断时用） |
-| 管理面板 | HTTP | 8080 | 启停服务、加人发令牌、看日志、生成接入说明 |
+| 管理面板 | HTTP | 9999 | 启停服务、加人发令牌、看日志、生成接入说明 |
 
 纯 Python 3.8+ 标准库，`requirements.txt` 都不需要。
 
@@ -19,7 +19,7 @@ git clone <repo> && cd proxy_inside
 docker compose up -d
 ```
 
-打开 `http://服务器IP:8080`，用 `PANEL_USER` / `PANEL_PASS` 登录。
+打开 `http://服务器IP:9999`，用 `PANEL_USER` / `PANEL_PASS` 登录。
 
 首次启动会在 `./data/users.json` 自动建一个 `admin` 用户；如果 compose 里没设 `TOKEN`，
 令牌是随机生成的，**打印在容器日志里**：
@@ -51,7 +51,7 @@ docker compose logs | grep token
 面板首页「我的设备」里有 PAC 地址：
 
 ```
-http://<服务器>:8080/proxy.pac
+http://<服务器>:9999/proxy.pac
 ```
 
 填进系统代理设置（Windows：Internet 选项 → 局域网设置 → 使用自动配置脚本；

@@ -2,13 +2,13 @@
 """panel.py — 代理服务管理面板（零第三方依赖）。
 
 一个进程同时提供：
-  * Web 管理界面 / API（默认 8080）
+  * Web 管理界面 / API（默认 9999）
   * 子进程管理：HTTP 代理、SOCKS5、GitHub SSH 中转
   * 多用户令牌表读写（/data/users.json，代理热加载）
   * 按服务切分的日志文件（/data/logs/*.log）
 
 环境变量：
-  PANEL_PORT=8080  PANEL_USER=admin  PANEL_PASS=changeme
+  PANEL_PORT=9999  PANEL_USER=admin  PANEL_PASS=changeme
   HTTP_PORT=18081  SOCKS_PORT=18082  GH_RELAY_PORT=2222
   BIND=0.0.0.0  DATA_DIR=/data  TOKEN=  ALLOW=  MASK_IP=  RELAX_AUTH=1
 """
@@ -34,7 +34,7 @@ TRUST_FILE = os.path.join(DATA, "trusted.json")
 LOG_DIR = os.path.join(DATA, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-PANEL_PORT = int(os.environ.get("PANEL_PORT", "8080"))
+PANEL_PORT = int(os.environ.get("PANEL_PORT", "9999"))
 PANEL_USER = os.environ.get("PANEL_USER", "admin")
 PANEL_PASS = os.environ.get("PANEL_PASS", "changeme")
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "18081"))

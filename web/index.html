@@ -105,6 +105,15 @@ input:focus,select:focus{border-color:var(--acc)}
   </div>
 
   <div class="card">
+    <h2>代理命令（复制粘贴即用）</h2>
+    <div class="tag" style="margin-bottom:10px">
+      已在「可信名单」里的机器不需要密码；否则后面加
+      <code>--proxy-user 任意:你的令牌</code>（curl）或把令牌填进密码框。
+    </div>
+    <div id="cmds"></div>
+  </div>
+
+  <div class="card">
     <h2>用户与令牌</h2>
     <div class="row">
       <input id="newName" placeholder="用户名，如 zhangsan" style="flex:1;min-width:160px">
@@ -262,6 +271,64 @@ function copyPac(){
     .catch(() => toast("复制失败，手动选中", true));
 }
 
+let ENVCFG = {http_port: 18081, socks_port: 18082, relay_port: 2222};
+
+async function loadEnv(){
+  try{
+    ENVCFG = await api("/api/env");
+  }catch(e){ /* 用默认值 */ }
+  renderCmds();
+}
+
+function renderCmds(){
+  const h = location.hostname || "127.0.0.1";
+  const hp = ENVCFG.http_port, sp = ENVCFG.socks_port, rp = ENVCFG.relay_port;
+  const items = [
+    ["Windows CMD（当前窗口临时生效）",
+     `set http_proxy=http://${h}:${hp}\nset https_proxy=http://${h}:${hp}`],
+    ["Windows PowerShell（当前会话）",
+     `$env:http_proxy="http://${h}:${hp}"\n$env:https_proxy="http://${h}:${hp}"`],
+    ["Linux / macOS（当前 shell）",
+     `export http_proxy=http://${h}:${hp}\nexport https_proxy=$http_proxy\nexport no_proxy=localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`],
+    ["curl 单次走代理",
+     `curl -x http://${h}:${hp} https://api.github.com/zen`],
+    ["git 全局（HTTPS clone/push）",
+     `git config --global http.proxy http://${h}:${hp}\n# 取消：git config --global --unset http.proxy`],
+    ["npm",
+     `npm config set proxy http://${h}:${hp}\nnpm config set https-proxy http://${h}:${hp}`],
+    ["pip",
+     `pip config set global.proxy http://${h}:${hp}`],
+    ["SOCKS5（不支持 HTTP 代理的程序）",
+     `export ALL_PROXY=socks5h://${h}:${sp}\n# 或 socks5h://${h}:${sp} 填进程序自己的设置`],
+    ["GitHub SSH 中转（443 被阻断时）",
+     `git remote set-url origin ssh://git@${h}:${rp}/OWNER/REPO.git\nssh -o StrictHostKeyChecking=accept-new -p ${rp} git@${h}\ngit push -u origin HEAD`],
+    ["验证代理是否生效",
+     `curl -sS https://api.github.com/zen`],
+  ];
+
+  $("#cmds").innerHTML = items.map(([title, code], i) => `
+    <div style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+        <span class="tag" style="flex:1">${title}</span>
+        <button onclick="copyCmd(${i})">复制</button>
+      </div>
+      <pre id="cmd${i}" style="margin:0">${escapeHtml(code)}</pre>
+    </div>`).join("");
+
+  window._cmds = items.map(x => x[1]);
+}
+
+function escapeHtml(t){
+  return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function copyCmd(i){
+  const text = (window._cmds || [])[i] || "";
+  navigator.clipboard.writeText(text)
+    .then(() => toast("已复制"))
+    .catch(() => toast("复制失败，手动选中", true));
+}
+
 async function loadUsers(){
   const d = await api("/api/users");
   $("#users").innerHTML = d.users.map(u => `
@@ -329,7 +396,7 @@ function copyDoc(){
     .catch(() => toast("复制失败，手动选中", true));
 }
 
-function refreshAll(){ loadStatus(); loadUsers(); loadTrust(); }
+function refreshAll(){ loadStatus(); loadUsers(); loadTrust(); loadEnv(); }
 
 $("#pacUrl").textContent = location.origin + "/proxy.pac";
 
