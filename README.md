@@ -1,26 +1,83 @@
 # ccsproxy
 
-单文件零依赖 HTTP 正向代理（CONNECT 隧道 + 普通 HTTP 转发），用于内网跳板机出网下载。仅需 Python 3.8+ 标准库。
+内网跳板机出网工具，两个零依赖 Python 服务，一条 `sh start.sh` 全起：
+
+| 文件 | 作用 | 协议 | 端口 |
+|---|---|---|---|
+| `ccsproxy.py` | HTTP 正向代理 | TCP（CONNECT 隧道 + 普通 HTTP） | 18081 |
+| `socks5udp.py` | SOCKS5 服务 | TCP + **UDP ASSOCIATE** | 18082 |
+
+只依赖 Python 3.8+ 标准库（socket / threading / select / argparse / signal），不需要 pip、不需要 root（端口 > 1024）。
+
+- 下文件、`curl`/`git`/浏览器 → 用 18081 的 HTTP 代理。
+- 要跑 **UU 远程**这类 UDP 应用 → 用 18082 的 SOCKS5，Windows 端配 sing-box TUN（见下文）。
 
 ## 快速开始
 
 ```bash
-# 裸机 / Docker 均可
-python3 ccsproxy.py 18081 0.0.0.0 --allow github.com,163.com --token s3cret
+# 裸机（推荐：UDP 场景只有这种方式最省心）
+sh start.sh
+# 带令牌和白名单
+TOKEN=s3cret ALLOW=github.com,163.com sh start.sh
 
 # 容器
-docker build -t ccsproxy:1.0 .
-docker run -d --name ccsproxy -p 18081:18081 -e TOKEN=s3cret -e ALLOW=github.com,163.com ccsproxy:1.0
+docker build -t ccsproxy:1.1 .
+docker run -d --name ccsproxy -p 18081:18081 -p 18082:18082 -e TOKEN=s3cret -e ALLOW=github.com,163.com ccsproxy:1.1
 ```
 
-客户端（注意令牌必须走 `--proxy-header`，`-H` 不进 CONNECT 请求）：
+日志：
+
+```
+[INFO] start.sh http=18081 socks=18082 bind=0.0.0.0 allow=ALL token=on ...
+[INFO] listening 0.0.0.0:18081 allow=ALL token=on max-conn=200 timeout=30.0s srcip=auto
+[INFO] socks5 listening 0.0.0.0:18082 token=on udp-advertise=auto
+[CONNECT] api.github.com:443 <- 10.8.35.107
+[UDP] associate 10.200.1.26:52341 <- 10.8.35.107
+```
+
+收工：`Ctrl+C`，或 `kill $(cat /tmp/ccsproxy.pid)`，两个端口一起释放。
+
+## HTTP 代理（18081）
 
 ```bash
+curl -x http://JUMP:18081 https://api.github.com/zen
+curl -x http://JUMP:18081 -L -o out.bin https://github.com/...
+# 开令牌时：curl 的 -H 不会进 CONNECT 请求，必须用 --proxy-header
 curl -x http://JUMP:18081 --proxy-header 'Proxy-Authorization: Bearer s3cret' https://api.github.com/zen
-curl -x http://JUMP:18081 --proxy-header 'Proxy-Authorization: Bearer s3cret' -L -o out.bin https://github.com/...
 ```
 
+Windows 上还要加 `--ssl-no-revoke`：本机无外网时 schannel 查不到证书吊销列表，会报
+`curl: (35) schannel: CRYPT_E_REVOCATION_OFFLINE`。
+
+```powershell
+curl.exe --ssl-no-revoke -L -x http://10.200.1.26:18081 -o out.msi https://github.com/...
+```
+
+## SOCKS5 + UDP（18082）
+
+服务端支持标准 SOCKS5 的 `CONNECT` 与 `UDP ASSOCIATE`，`--token` 时走 RFC1929 用户名/密码认证（用户名默认 `ccs`）。
+
+**Windows 客户端：sing-box TUN**（`client/` 目录已备好）
+
+```powershell
+# 管理员 PowerShell，在 client 目录下
+.\run-tun.ps1 -Password s3cret
+```
+
+脚本会自动：下载 `sing-box.exe`（经 18081 的 HTTP 代理）→ 补 `wintun.dll` → 按 `sing-box.json` 生成配置 → 起 TUN。
+起来后整机流量（含 UDP）走跳板机，UU 远程、浏览器、git 全都通。
+
+验证出口：
+
+```powershell
+curl.exe --ssl-no-revoke https://ifconfig.me
+```
+
+应该回显跳板机的出口 IP。
+
 ## 参数
+
+### ccsproxy.py（HTTP）
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
@@ -32,20 +89,49 @@ curl -x http://JUMP:18081 --proxy-header 'Proxy-Authorization: Bearer s3cret' -L
 | `--timeout S` | 30 | 连接/读写超时秒 |
 | `--srcip IP` | 系统选路 | 出站源地址绑定（多网卡选出口 IP） |
 
-## 行为
+### socks5udp.py（SOCKS5）
 
-- CONNECT：建上游 TCP → `200 Connection established` → 双向透传，任一端 EOF 后 `shutdown(SHUT_WR)` 半关闭，反向读干净再关。
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `port` | 18082 | 监听端口 |
+| `bind_host` | 0.0.0.0 | 监听地址 |
+| `--token T` | 空 | 用户名/密码认证的密码，空=不认证 |
+| `--user U` | ccs | 认证用户名 |
+| `--allow a,b` | 不限 | 目标白名单，UDP 按每个包的真实目标校验 |
+| `--max-conn N` | 200 | TCP 并发上限 |
+| `--timeout S` | 30 | TCP 超时秒 |
+| `--udp-bind IP` | 0.0.0.0 | UDP relay 绑定地址 |
+| `--advertise IP` | 自动探测 | 回给客户端的 UDP relay 地址 |
+
+### start.sh 环境变量
+
+`PORT` `SOCKS_PORT` `ENABLE_SOCKS` `BIND` `ALLOW` `TOKEN` `TOKEN_FILE` `REQUIRE_TOKEN` `MAX_CONN` `TIMEOUT` `SRCIP` `SOCKS_USER` `SOCKS_ADVERTISE`
+
+## 容器里的 UDP 限制
+
+SOCKS5 的 UDP relay 用**随机端口**，bridge 网络下没有对应的 `-p` 映射，容器外的客户端连不上。所以：
+
+- 只要 HTTP 下载 → 用上面那条 `docker run` 就行；
+- 要用 UU 远程 / UDP → 裸机 `sh start.sh`，或者容器改成 host 网络：
+
+```yaml
+services:
+  ccsproxy:
+    network_mode: host      # Linux 宿主；UDP relay 直接绑定宿主地址
+```
+
+## 行为说明
+
+- CONNECT / SOCKS5 CONNECT：建上游 TCP → 应答 → 双向透传，任一端 EOF 后 `shutdown(SHUT_WR)` 半关闭，反向读干净再关。
 - 普通 HTTP：绝对 URI 改写为 origin-form，剔除 `Proxy-Connection`/`Proxy-Authorization`/`Connection`/`Keep-Alive` 后转发。
-- 错误码：请求行非法 400、白名单外 403、缺令牌 407、上游失败 502、超并发 503。
-- 日志只打 `[CONNECT]`/`[HTTP]`/`[ERR]` 与主机端口，不打印头部、body、Cookie、令牌。
-- SIGINT/SIGTERM 关监听 socket 并打印 `bye`，端口立即释放。
-
-## 容器
-
-`start.sh` 是 POSIX sh 脚本（`sh start.sh` / `./start.sh` 都行，不依赖 bash），用环境变量驱动：`PORT` `BIND` `ALLOW` `TOKEN` `TOKEN_FILE` `REQUIRE_TOKEN` `MAX_CONN` `TIMEOUT` `SRCIP`，最后 exec 到 python，PID 1 直接接收 `docker stop` 的 SIGTERM。
-
-注意：容器内 `--srcip` 一般无意义（出口 IP 由 Docker NAT 决定），需要固定出口请用 `--network host`。
+- 上游连接 IPv4 优先，单地址 8s 上限，连上后恢复 `--timeout` 作为读写超时。
+- 错误码：400 请求非法、403 白名单外、407 缺令牌、502 上游失败、503 超并发。
+- 日志只打 `[CONNECT]`/`[HTTP]`/`[UDP]`/`[ERR]` 与主机端口，不打印头部、body、Cookie、令牌。
+- SIGINT/SIGTERM 关闭监听并打印 `bye` / `socks5 bye`，端口立即释放。
 
 ## 已知边界
 
-不做 TLS 中间人、不解析 HTTP/2、不缓存、不落盘。UU 远程这类走 UDP 打洞/中继的客户端不受 HTTP 代理覆盖，那类需求请改用 SOCKS5。
+- HTTP 代理只能搬 TCP；UDP 必须走 SOCKS5 + TUN 客户端。
+- 不做 TLS 中间人、不解析 HTTP/2、不缓存、不落盘。
+- sing-box TUN 需要 Windows 管理员权限；没有管理员权限就无法建立 TUN 网卡，UDP 无解。
+- UU 远程对 VPN 环境可能有检测，连上后画质/稳定性取决于它的策略，不是代理能控制的。

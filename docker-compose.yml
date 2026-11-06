@@ -4,16 +4,21 @@ services:
     image: ccsproxy:1.0
     container_name: ccsproxy
     ports:
-      - "18081:18081"
+      - "18081:18081"   # HTTP 正向代理（curl / git / 浏览器）
+      - "18082:18082"   # SOCKS5 + UDP ASSOCIATE（sing-box TUN / UU 远程）
     environment:
       PORT: "18081"
+      SOCKS_PORT: "18082"
+      ENABLE_SOCKS: "1"          # 0 = 只起 HTTP 代理
       # 白名单按后缀匹配：163.com 覆盖 UU 远程所有 *.163.com 子域
       ALLOW: "github.com,codeload.github.com,objects.githubusercontent.com,release-assets.githubusercontent.com,api.github.com,163.com"
       # 生产务必改掉；也可改用 TOKEN_FILE 挂载 secret
       TOKEN: "change-me-please"
+      SOCKS_USER: "ccs"
       MAX_CONN: "200"
       TIMEOUT: "30"
-      # 容器内出口 IP 由 docker NAT 决定，--srcip 一般留空
+      # 容器内出口 IP 由 docker NAT 决定，--srcip 一般留空；
+      # SOCKS5 的 UDP relay 地址也由程序自动探测容器地址
       SRCIP: ""
     restart: "no"          # 临时跳板，用完即关：docker compose down
     logging:
