@@ -52,6 +52,28 @@ show_owner() {
   fi
 }
 
+# 找出监听某端口的进程 pid（ss 优先，macOS 退 lsof）
+port_pids() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp 2>/dev/null | grep -E "[:.]$1\b" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | sort -u
+  fi
+}
+
+# 按端口强杀：命令行认不出来的旧进程（比如内联 python 脚本）也能清掉
+kill_port_owners() {
+  for p in "$PORT_PANEL" "$PORT_HTTP" "$PORT_SOCKS" "$PORT_RELAY"; do
+    pids=$(port_pids "$p")
+    [ -n "$pids" ] || continue
+    for pid in $pids; do
+      warn "端口 ${p} 被 pid=${pid} 占用，强制结束"
+      kill -9 "$pid" 2>/dev/null || true
+    done
+  done
+  sleep 0.5
+}
+
 # 干掉以前手动起的裸机进程（它们会占住容器要用的端口）
 kill_strays() {
   pkill -f '[c]csproxy[.]py'      2>/dev/null || true
@@ -92,6 +114,7 @@ do_up() {
 
   log "清理占端口的残留进程"
   kill_strays
+  kill_port_owners
 
   for p in "$PORT_PANEL" "$PORT_HTTP" "$PORT_SOCKS" "$PORT_RELAY"; do
     if port_busy "$p"; then
@@ -100,6 +123,9 @@ do_up() {
       die "先停掉上面的程序，或改 .env 里的端口再启动"
     fi
   done
+
+  mkdir -p "$DIR/data" || die "无法创建 $DIR/data"
+  [ -w "$DIR/data" ] || die "$DIR/data 不可写，检查目录权限"
 
   log "构建镜像"
   $COMPOSE build

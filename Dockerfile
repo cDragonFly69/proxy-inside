@@ -17,9 +17,9 @@ WORKDIR /app
 COPY ccsproxy.py socks5udp.py users.py panel.py gh_relay_worker.py start.sh /app/
 COPY web /app/web
 
-RUN mkdir -p /data/logs && chown -R nobody:nogroup /app /data
-
-USER nobody
+# /data 是 bind mount，宿主机目录属主不一定是 nobody；
+# 容器内以 root 运行最省事（容器本身即隔离边界，内部工具无需再降权）
+RUN mkdir -p /data/logs
 
 VOLUME ["/data"]
 EXPOSE 9999 18081 18082 2222
