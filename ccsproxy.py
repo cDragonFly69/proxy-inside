@@ -78,15 +78,18 @@ def split_hostport(target, default_port):
     return (None, None) if ":" in target else (target, default_port)
 
 def connect_upstream(host, port, cfg):
-    """建立上游 TCP；--srcip 时先 bind，把出站源 IP 钉在指定出口地址（上游只看到该 IP）。"""
+    """建立上游 TCP；IPv4 优先，容器里常有不可达的 IPv6，会让 connect 白等到超时。"""
+    infos = sorted(socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM),
+                   key=lambda x: 0 if x[0] == socket.AF_INET else 1)
     last = None
-    for fam, stype, proto, _, sa in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
+    for fam, stype, proto, _, sa in infos:
         s = socket.socket(fam, stype, proto)
-        s.settimeout(cfg.timeout)  # 工作 socket 必须带超时
+        s.settimeout(min(float(cfg.timeout), 8.0))  # 单地址连接上限，坏地址不拖死整个请求
         try:
             if cfg.srcip:
                 s.bind((cfg.srcip, 0))
             s.connect(sa)
+            s.settimeout(cfg.timeout)               # 连上后恢复业务读写超时
             return s
         except OSError as e:
             last = e
@@ -113,10 +116,8 @@ def pump(a, b):
     """双向透传，两个方向都收尾才返回（尾部读完再关，避免大文件被截断）。"""
     ts = [threading.Thread(target=pipe, args=(a, b), daemon=True),
           threading.Thread(target=pipe, args=(b, a), daemon=True)]
-    for t in ts:
-        t.start()
-    for t in ts:
-        t.join()
+    for t in ts: t.start()
+    for t in ts: t.join()
 
 def handle(conn, addr, cfg):
     """单个客户端连接全流程；任何异常都只影响本连接。"""
@@ -155,23 +156,23 @@ def handle(conn, addr, cfg):
         if not host_allowed(host, cfg.allow):
             fail(conn, 403, "Forbidden", ip, "403 %s not allowed" % host)
             return
+        if method.upper() == "CONNECT":
+            log("CONNECT", "%s:%d <- %s" % (host, port, ip))
+        else:
+            log("HTTP", "%s%s <- %s" % (host, path, ip))
         try:
             up = connect_upstream(host, port, cfg)
         except OSError as e:
             fail(conn, 502, "Bad Gateway", ip, "502 %s:%d %s" % (host, port, e))
             return
         if method.upper() == "CONNECT":
-            log("CONNECT", "%s:%d <- %s" % (host, port, ip))
             conn.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
             if extra:  # 客户端抢跑的 TLS 字节，先补给上游
                 up.sendall(extra)
         else:
-            log("HTTP", "%s%s <- %s" % (host, path, ip))
             out = ["%s %s %s" % (method, path, version)]
-            for k, v in headers:
-                if k.lower() in ("proxy-connection", "proxy-authorization", "connection", "keep-alive"):
-                    continue  # 代理专用头与连接管理头不下传
-                out.append("%s: %s" % (k, v))
+            out += ["%s: %s" % (k, v) for k, v in headers  # 代理专用头与连接管理头不下传
+                    if k.lower() not in ("proxy-connection", "proxy-authorization", "connection", "keep-alive")]
             out.append("Connection: close")
             up.sendall(("\r\n".join(out) + "\r\n\r\n").encode("latin-1"))
             if extra:  # 已读出的 body 前奏补回
@@ -183,9 +184,8 @@ def handle(conn, addr, cfg):
         log("ERR", "unexpected %s <- %s" % (e.__class__.__name__, ip))
     finally:
         for s in (conn, up):
-            if s is not None:
-                try: s.close()
-                except OSError: pass
+            try: s and s.close()
+            except OSError: pass
         with LOCK:
             NOW -= 1
 
