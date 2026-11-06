@@ -137,8 +137,7 @@ ensure_env() {
     fi
     return
   fi
-  PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)
-  [ -n "$PASS" ] || PASS="changeme$RANDOM"
+  PASS="admin112233"
   cat > .env <<EOF
 PANEL_USER=admin
 PANEL_PASS=$PASS
@@ -146,7 +145,7 @@ HOST_UID=$(id -u)
 HOST_GID=$(id -g)
 EOF
   chmod 600 .env
-  log "首次运行，已生成 .env（面板密码：${PASS}）"
+  log "首次运行，已生成 .env（面板账号 admin / ${PASS}）"
   PANEL_USER=admin
   PANEL_PASS=$PASS
 }

@@ -8,7 +8,7 @@
   * 按服务切分的日志文件（/data/logs/*.log）
 
 环境变量：
-  PANEL_PORT=9999  PANEL_USER=admin  PANEL_PASS=changeme
+  PANEL_PORT=9999  PANEL_USER=admin  PANEL_PASS=admin112233
   HTTP_PORT=18081  SOCKS_PORT=18082  GH_RELAY_PORT=2222
   BIND=0.0.0.0  DATA_DIR=/data  TOKEN=  ALLOW=  MASK_IP=  RELAX_AUTH=1
 """
@@ -36,7 +36,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 PANEL_PORT = int(os.environ.get("PANEL_PORT", "9999"))
 PANEL_USER = os.environ.get("PANEL_USER", "admin")
-PANEL_PASS = os.environ.get("PANEL_PASS", "changeme")
+PANEL_PASS = os.environ.get("PANEL_PASS", "admin112233")
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "18081"))
 SOCKS_PORT = int(os.environ.get("SOCKS_PORT", "18082"))
 RELAY_PORT = int(os.environ.get("GH_RELAY_PORT", "2222"))

@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1 \
     GH_RELAY_PORT=2222 \
     BIND=0.0.0.0 \
     PANEL_USER=admin \
-    PANEL_PASS=changeme
+    PANEL_PASS=admin112233
 
 WORKDIR /app
 

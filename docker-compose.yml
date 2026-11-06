@@ -13,7 +13,7 @@ services:
     environment:
       # 账号密码来自 .env（start.sh 首次运行会自动生成随机密码）
       PANEL_USER: ${PANEL_USER:-admin}
-      PANEL_PASS: ${PANEL_PASS:-change-me-please}
+      PANEL_PASS: ${PANEL_PASS:-admin112233}
       # 留空 = 首次启动自动建 admin 用户并随机生成令牌（打印在容器日志里）
       TOKEN: ${TOKEN:-}
       # 目标域名白名单，逗号分隔；留空 = 不限
