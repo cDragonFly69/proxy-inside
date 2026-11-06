@@ -74,4 +74,14 @@ if [ "$ENABLE_SOCKS" = "1" ]; then
   PIDS="$PIDS $!"
 fi
 
+# 启动自检：任一服务没起来（端口占用等）就收掉另一个并报错，避免半死不活
+sleep 1
+for p in $PIDS; do
+  if ! kill -0 "$p" 2>/dev/null; then
+    echo "[ERR] 有服务启动失败，检查端口占用：ss -ltnp | grep -E ':${PORT}|:${SOCKS_PORT}'" >&2
+    for q in $PIDS; do kill "$q" 2>/dev/null || true; done
+    exit 1
+  fi
+done
+
 wait
