@@ -119,7 +119,15 @@ if (-not (Test-Path $exe) -or -not (Test-Path $wintun)) { Fetch-Bundle }
 $tpl  = Get-Content $tplPath -Raw -Encoding UTF8
 $conf = $tpl.Replace("__SERVER__", $Server).Replace("__PORT__", "$SocksPort").
              Replace("__USER__", $User).Replace("__PASS__", $Password)
-Set-Content -Path $cfgPath -Value $conf -Encoding UTF8
+# 去掉可能残留的 BOM：sing-box 不认带 BOM 的 JSON
+$conf = $conf.TrimStart([char]0xFEFF)
+# 必须写成无 BOM UTF-8，Set-Content -Encoding UTF8 在 PS 5.1 会加 BOM
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($cfgPath, $conf, $utf8NoBom)
+$head = [System.IO.File]::ReadAllBytes($cfgPath)
+if ($head.Length -ge 3 -and $head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF) {
+  throw "config.json 仍带 BOM，写入失败"
+}
 
 Line "`n== 启动 TUN =="
 Line "  服务器 $Server`:$SocksPort  user=$User" "Green"

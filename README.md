@@ -82,9 +82,9 @@ SERVER=10.200.1.26 SOCKS_PORT=18082 TOKEN=s3cret HTTP_PORT=18090 sh make-bundle.
 
 想强制重下客户端二进制：`sh make-bundle.sh --refresh`。
 
-### ② Windows 上双击 `启动.bat`
+### ② Windows 上双击 `start-client.bat`
 
-`client/启动.bat` 自动请求管理员权限并启动，不需要敲任何命令。
+`client/start-client.bat` 自动请求管理员权限并启动，不需要敲任何命令。
 令牌和跳板机地址写在 bat 开头两行，改那里即可。
 
 或者手动跑（等价）：

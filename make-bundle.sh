@@ -100,7 +100,7 @@ log "config.json 已生成（server=${SERVER}:${SOCKS_PORT} user=${SOCKS_USER}�
 # ---------- 4) 打包 ----------
 rm -f "$BUNDLE"
 tar czf "$BUNDLE" -C "$CLIENT" \
-  run-tun.ps1 sing-box.json config.json sing-box.exe wintun.dll "启动.bat"
+  run-tun.ps1 sing-box.json config.json sing-box.exe wintun.dll start-client.bat
 log "打包完成：${BUNDLE}（$(du -h "$BUNDLE" | cut -f1)）"
 
 # ---------- 5) 起分发服务 ----------
