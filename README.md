@@ -11,21 +11,44 @@
 
 纯 Python 3.8+ 标准库，`requirements.txt` 都不需要。
 
-## Docker 部署（推荐）
+## 一条命令启动
 
 ```bash
 git clone <repo> && cd proxy_inside
-# 改 docker-compose.yml 里的 PANEL_PASS，然后
-docker compose up -d
+sh start.sh
 ```
 
-打开 `http://服务器IP:9999`，用 `PANEL_USER` / `PANEL_PASS` 登录。
+就这样。脚本会自己完成：清旧容器 → 杀占端口的残留进程 → 构建镜像 → 后台启动 →
+等到面板响应 → 打印访问地址、面板密码、代理令牌。
 
-首次启动会在 `./data/users.json` 自动建一个 `admin` 用户；如果 compose 里没设 `TOKEN`，
-令牌是随机生成的，**打印在容器日志里**：
+首次运行会生成 `.env`（内含随机面板密码），所以**开箱就是安全的**，不用手改配置。
+
+```
+══════════════════════════════════════════════
+ 面板    http://10.200.1.26:9999
+ 账号    admin / frxcaYi11Mzth7xd
+ 代理令牌 RD-81nV-2MoKRv4ps9DJhVk0
+ 端口    HTTP 18081 · SOCKS5 18082 · SSH 中转 2222
+══════════════════════════════════════════════
+```
+
+其他子命令：
 
 ```bash
-docker compose logs | grep token
+sh start.sh           # 启动（同 up）
+sh start.sh down      # 停止并删除容器
+sh start.sh restart   # 重启
+sh start.sh logs      # 跟踪日志
+sh start.sh status    # 查看状态
+sh start.sh local     # 不用 Docker，直接跑裸机进程
+```
+
+改端口就在 `.env` 里加 `PANEL_PORT=19999` 之类，宿主机映射会跟着变。
+
+首次启动的 `admin` 用户和令牌写在 `./data/users.json`，令牌也打印在容器日志里：
+
+```bash
+sh start.sh logs | grep token
 ```
 
 > **UDP 必须 host 网络**：SOCKS5 的 UDP relay 用随机端口，bridge 模式映射不出来。
@@ -71,7 +94,7 @@ PAC 不携带令牌，所以对所有人可读；它只是个分流规则。
 ## 裸机运行（不要容器时）
 
 ```bash
-sh start.sh                                   # 起 HTTP + SOCKS5
+sh run-local.sh                               # 起 HTTP + SOCKS5
 TOKEN=s3cret ALLOW=github.com,163.com sh start.sh
 python3 panel.py                              # 想要面板就再起这个
 ```

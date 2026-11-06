@@ -5,29 +5,28 @@ services:
     container_name: ccs-proxy
     restart: unless-stopped
     ports:
-      - "9999:9999"      # Web 管理面板
-      - "18081:18081"    # HTTP 代理
-      - "18082:18082"    # SOCKS5 + UDP
-      - "2222:2222"      # GitHub SSH 中转
+      # 左边是宿主机端口（可在 .env 里改），右边是容器内固定端口
+      - "${PANEL_PORT:-9999}:9999"        # Web 管理面板
+      - "${HTTP_PORT:-18081}:18081"       # HTTP 代理
+      - "${SOCKS_PORT:-18082}:18082"      # SOCKS5 + UDP
+      - "${GH_RELAY_PORT:-2222}:2222"     # GitHub SSH 中转
     environment:
-      # ── 面板登录（务必改）────────────────────────────
-      PANEL_USER: admin
-      PANEL_PASS: change-me-please
-      # ── 代理 ─────────────────────────────────────────
-      # 首次启动会在 /data/users.json 里自动建一个 admin 用户，
-      # token 用下面的 TOKEN；留空则随机生成并打印在容器日志里。
-      TOKEN: ""
-      # 目标白名单，逗号分隔后缀匹配；留空=不限
-      ALLOW: "github.com,163.com,githubusercontent.com"
+      # 账号密码来自 .env（start.sh 首次运行会自动生成随机密码）
+      PANEL_USER: ${PANEL_USER:-admin}
+      PANEL_PASS: ${PANEL_PASS:-change-me-please}
+      # 留空 = 首次启动自动建 admin 用户并随机生成令牌（打印在容器日志里）
+      TOKEN: ${TOKEN:-}
+      # 目标域名白名单，逗号分隔；留空 = 不限
+      ALLOW: ${ALLOW:-}
       # 日志里展示的客户端 IP（真实 IP 记到 /data/ccsproxy.real.log）
-      MASK_IP: ""
-      MAX_CONN: "200"
-      TIMEOUT: "30"
+      MASK_IP: ${MASK_IP:-}
+      MAX_CONN: ${MAX_CONN:-200}
+      TIMEOUT: ${TIMEOUT:-30}
       # 客户端不支持 RFC1929 时按无认证放行（UU 远程这类）
-      RELAX_AUTH: "1"
+      RELAX_AUTH: ${RELAX_AUTH:-1}
       # GitHub SSH 中转的上游
-      GH_RELAY_UPSTREAM: "github.com:22"
+      GH_RELAY_UPSTREAM: ${GH_RELAY_UPSTREAM:-github.com:22}
     volumes:
       - ./data:/data
-    # UDP relay 用随机端口；要用 UDP（UU 远程 / TUN 客户端）必须 host 网络
+    # UDP relay 用随机端口；要用 UDP（UU 远程 / TUN 客户端）必须 host 网络：
     # network_mode: host

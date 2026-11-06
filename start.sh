@@ -1,101 +1,176 @@
 #!/bin/sh
-# ccsproxy + socks5udp 一键启动 —— POSIX sh 兼容，dash / bash / busybox sh 都能跑：
-#   sh start.sh
-# 同时起两个服务：
-#   1) HTTP 正向代理（CCSPROXY）  —— curl/git/浏览器下载用，只有 TCP
-#   2) SOCKS5 + UDP ASSOCIATE     —— UU 远程这类 UDP 应用用，配 sing-box TUN 接管整机流量
-# 全部用环境变量驱动；收到 SIGINT/SIGTERM 时一并收掉两个子进程。
+# start.sh —— 一条命令启动全部服务（Docker）
+#
+#   sh start.sh            启动（自动清旧容器/占端口的残留进程，构建并后台运行）
+#   sh start.sh down       停止并删除容器
+#   sh start.sh restart    重启
+#   sh start.sh logs       跟踪日志
+#   sh start.sh status     查看状态
+#   sh start.sh local      不用 Docker，直接起裸机进程
+#
+# 启动后打开 http://<服务器IP>:9999 ，账号密码见 .env
 set -eu
 
-PORT="${PORT:-18081}"                 # HTTP 代理端口
-SOCKS_PORT="${SOCKS_PORT:-18082}"     # SOCKS5 端口
-ENABLE_SOCKS="${ENABLE_SOCKS:-1}"     # 0 = 只起 HTTP 代理
-BIND="${BIND:-0.0.0.0}"
-ALLOW="${ALLOW:-}"
-MAX_CONN="${MAX_CONN:-200}"
-TIMEOUT="${TIMEOUT:-30}"
-SRCIP="${SRCIP:-}"
-SOCKS_USER="${SOCKS_USER:-ccs}"       # SOCKS5 认证用户名
-SOCKS_ADVERTISE="${SOCKS_ADVERTISE:-}" # 回给客户端的 UDP relay 地址，空=自动探测
-SOCKS_RELAX_AUTH="${SOCKS_RELAX_AUTH:-1}"  # 1=客户端不支持用户名密码认证时按无认证放行（UU 远程这类）
-MASK_IP="${MASK_IP:-}"                # 日志里展示的客户端 IP（真实 IP 记到 /tmp/ccsproxy.real.log）
-
-# 令牌：优先 TOKEN；否则从 TOKEN_FILE（docker secret / 挂载文件）首行读取
-TOKEN="${TOKEN:-}"
-if [ -z "${TOKEN}" ] && [ -n "${TOKEN_FILE:-}" ] && [ -r "${TOKEN_FILE}" ]; then
-  TOKEN="$(head -n 1 "${TOKEN_FILE}" | tr -d '\r\n')"
-fi
-if [ -z "${TOKEN}" ] && [ "${REQUIRE_TOKEN:-0}" = "1" ]; then
-  echo "[ERR] REQUIRE_TOKEN=1 但未提供 TOKEN / TOKEN_FILE" >&2
-  exit 1
-fi
-
-# 按脚本自身所在目录定位程序：容器内是 /app，裸机是仓库目录
 DIR=$(cd "$(dirname "$0")" && pwd -P)
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "[ERR] 未找到 python3，请先安装 Python 3.8+" >&2
-  exit 1
-fi
+cd "$DIR"
 
-# 启动前清理：只杀命令行里含本程序名的旧进程，不动别人的服务
-if [ "${KILL_OLD:-1}" = "1" ] && command -v pkill >/dev/null 2>&1; then
-  # 方括号写法让 pkill 不会匹配到执行它的 shell 自身（命令行里的字面方括号不匹配该正则）
-  pkill -f '[c]csproxy[.]py' 2>/dev/null || true
-  pkill -f '[s]ocks5udp[.]py' 2>/dev/null || true
-  sleep 1
-  # 老版本进程可能不响应 SIGTERM（阻塞在 accept 上），强杀兜底
-  pkill -9 -f '[c]csproxy[.]py' 2>/dev/null || true
-  pkill -9 -f '[s]ocks5udp[.]py' 2>/dev/null || true
-  sleep 0.3
-fi
+PORT_PANEL="${PANEL_PORT:-9999}"
+PORT_HTTP="${HTTP_PORT:-18081}"
+PORT_SOCKS="${SOCKS_PORT:-18082}"
+PORT_RELAY="${GH_RELAY_PORT:-2222}"
 
-PIDS=""
-cleanup() {
-  trap - INT TERM
-  for p in $PIDS; do kill "$p" 2>/dev/null || true; done
-  wait 2>/dev/null || true
-  exit 0
-}
-trap cleanup INT TERM
+log()  { printf '\033[36m[start]\033[0m %s\n' "$*"; }
+warn() { printf '\033[33m[warn]\033[0m %s\n' "$*"; }
+die()  { printf '\033[31m[ERR]\033[0m %s\n' "$*" >&2; exit 1; }
 
-start_http() {
-  set -- "$PORT" "$BIND" --max-conn "$MAX_CONN" --timeout "$TIMEOUT"
-  if [ -n "$ALLOW" ]; then set -- "$@" --allow "$ALLOW"; fi
-  if [ -n "$TOKEN" ]; then set -- "$@" --token "$TOKEN"; fi
-  if [ -n "$SRCIP" ]; then set -- "$@" --srcip "$SRCIP"; fi
-  if [ -n "$MASK_IP" ]; then set -- "$@" --mask-ip "$MASK_IP"; fi
-  exec python3 "$DIR/ccsproxy.py" "$@"   # exec：后台子 shell 被 python 取代，kill 得到的就是它
-}
-
-start_socks() {
-  set -- "$SOCKS_PORT" "$BIND" --max-conn "$MAX_CONN" --timeout "$TIMEOUT"
-  if [ -n "$ALLOW" ]; then set -- "$@" --allow "$ALLOW"; fi
-  if [ -n "$TOKEN" ]; then set -- "$@" --token "$TOKEN" --user "$SOCKS_USER"; fi
-  if [ "$SOCKS_RELAX_AUTH" = 1 ]; then set -- "$@" --relax-auth; fi
-  if [ -n "$SOCKS_ADVERTISE" ]; then set -- "$@" --advertise "$SOCKS_ADVERTISE"; fi
-  if [ -n "$MASK_IP" ]; then set -- "$@" --mask-ip "$MASK_IP"; fi
-  exec python3 "$DIR/socks5udp.py" "$@"
-}
-
-if [ -n "${TOKEN}" ]; then TOKEN_STATE=on; else TOKEN_STATE=off; fi
-echo "[INFO] start.sh http=${PORT} socks=${SOCKS_PORT} bind=${BIND} allow=${ALLOW:-ALL} token=${TOKEN_STATE} max-conn=${MAX_CONN} timeout=${TIMEOUT} mask=${MASK_IP:-off}" >&2
-
-start_http &
-PIDS="$PIDS $!"
-
-if [ "$ENABLE_SOCKS" = "1" ]; then
-  start_socks &
-  PIDS="$PIDS $!"
-fi
-
-# 启动自检：任一服务没起来（端口占用等）就收掉另一个并报错，避免半死不活
-sleep 1
-for p in $PIDS; do
-  if ! kill -0 "$p" 2>/dev/null; then
-    echo "[ERR] 有服务启动失败，检查端口占用：ss -ltnp | grep -E ':${PORT}|:${SOCKS_PORT}'" >&2
-    for q in $PIDS; do kill "$q" 2>/dev/null || true; done
-    exit 1
+# ---------------------------------------------------------------- 环境检测
+need_docker() {
+  command -v docker >/dev/null 2>&1 || die "没装 docker，先装：curl -fsSL https://get.docker.com | sh"
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE="docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE="docker-compose"
+  else
+    die "没装 docker compose 插件"
   fi
-done
+  docker info >/dev/null 2>&1 || die "docker 守护进程没跑，或当前用户没权限（试试 sudo 或加入 docker 组）"
+}
 
-wait
+port_busy() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1\$"
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+show_owner() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp 2>/dev/null | grep -E "[:.]$1\b" || true
+  fi
+}
+
+# 干掉以前手动起的裸机进程（它们会占住容器要用的端口）
+kill_strays() {
+  pkill -f '[c]csproxy[.]py'      2>/dev/null || true
+  pkill -f '[s]ocks5udp[.]py'     2>/dev/null || true
+  pkill -f '[g]h_relay_worker[.]py' 2>/dev/null || true
+  pkill -f '[g]h-relay[.]sh'      2>/dev/null || true
+  pkill -f '[p]anel[.]py'         2>/dev/null || true
+  sleep 1
+}
+
+# ---------------------------------------------------------------- .env
+ensure_env() {
+  if [ -f .env ]; then
+    # shellcheck disable=SC1091
+    . ./.env
+    return
+  fi
+  PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)
+  [ -n "$PASS" ] || PASS="changeme$RANDOM"
+  cat > .env <<EOF
+PANEL_USER=admin
+PANEL_PASS=$PASS
+EOF
+  chmod 600 .env
+  log "首次运行，已生成 .env（面板密码：${PASS}）"
+  PANEL_USER=admin
+  PANEL_PASS=$PASS
+}
+
+# ---------------------------------------------------------------- 动作
+do_up() {
+  need_docker
+  ensure_env
+
+  log "清理旧容器"
+  $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+  docker rm -f ccs-proxy >/dev/null 2>&1 || true
+
+  log "清理占端口的残留进程"
+  kill_strays
+
+  for p in "$PORT_PANEL" "$PORT_HTTP" "$PORT_SOCKS" "$PORT_RELAY"; do
+    if port_busy "$p"; then
+      warn "端口 $p 仍被占用："
+      show_owner "$p"
+      die "先停掉上面的程序，或改 .env 里的端口再启动"
+    fi
+  done
+
+  log "构建镜像"
+  $COMPOSE build
+
+  log "启动容器"
+  $COMPOSE up -d
+
+  log "等待服务就绪"
+  i=0
+  while [ "$i" -lt 30 ]; do
+    if curl -fsS -o /dev/null -m 2 "http://127.0.0.1:$PORT_PANEL/" 2>/dev/null; then
+      break
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+
+  if [ "$i" -ge 30 ]; then
+    warn "面板 30 秒内没响应，看日志："
+    $COMPOSE logs --tail 40
+    die "启动失败"
+  fi
+
+  # 首次启动的 admin 令牌在容器日志里
+  TOK=$(docker logs ccs-proxy 2>&1 | grep -o 'token=[A-Za-z0-9_-]*' | head -1 | cut -d= -f2 || true)
+  IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+  [ -n "$IP" ] || IP="<服务器IP>"
+
+  printf '\n'
+  printf '══════════════════════════════════════════════\n'
+  printf ' 面板    http://%s:%s\n' "$IP" "$PORT_PANEL"
+  printf ' 账号    %s / %s\n' "${PANEL_USER:-admin}" "${PANEL_PASS:-见 .env}"
+  if [ -n "$TOK" ]; then
+    printf ' 代理令牌 %s\n' "$TOK"
+  fi
+  printf ' 端口    HTTP %s · SOCKS5 %s · SSH 中转 %s\n' "$PORT_HTTP" "$PORT_SOCKS" "$PORT_RELAY"
+  printf '══════════════════════════════════════════════\n'
+  printf ' 停止：sh start.sh down    日志：sh start.sh logs\n\n'
+}
+
+do_down() {
+  need_docker
+  log "停止容器"
+  $COMPOSE down --remove-orphans
+  log "已停止"
+}
+
+do_logs() {
+  need_docker
+  exec $COMPOSE logs -f --tail 100
+}
+
+do_status() {
+  need_docker
+  $COMPOSE ps
+}
+
+case "${1:-up}" in
+  up|"")    do_up ;;
+  down|stop) do_down ;;
+  restart)  do_down; do_up ;;
+  logs)     do_logs ;;
+  status|ps) do_status ;;
+  local)
+    log "裸机模式（不用 Docker）"
+    exec sh "$DIR/run-local.sh"
+    ;;
+  -h|--help|help)
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    die "未知参数 $1；可用：up / down / restart / logs / status / local"
+    ;;
+esac
