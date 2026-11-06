@@ -42,7 +42,7 @@ curl -x http://JUMP:18081 --proxy-header 'Proxy-Authorization: Bearer s3cret' -L
 
 ## 容器
 
-`start.sh` 用环境变量驱动：`PORT` `BIND` `ALLOW` `TOKEN` `TOKEN_FILE` `REQUIRE_TOKEN` `MAX_CONN` `TIMEOUT` `SRCIP`，最后 exec 到 python，PID 1 直接接收 `docker stop` 的 SIGTERM。
+`start.sh` 是 POSIX sh 脚本（`sh start.sh` / `./start.sh` 都行，不依赖 bash），用环境变量驱动：`PORT` `BIND` `ALLOW` `TOKEN` `TOKEN_FILE` `REQUIRE_TOKEN` `MAX_CONN` `TIMEOUT` `SRCIP`，最后 exec 到 python，PID 1 直接接收 `docker stop` 的 SIGTERM。
 
 注意：容器内 `--srcip` 一般无意义（出口 IP 由 Docker NAT 决定），需要固定出口请用 `--network host`。
 
