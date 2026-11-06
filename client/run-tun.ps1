@@ -1,12 +1,10 @@
 ﻿<#
-  run-tun.ps1 —— Windows 端一键把整机流量（含 UDP）导到跳板机，UU 远程等应用即可用。
+  run-tun.ps1 —— Windows 端把整机流量（含 UDP）导到跳板机，UU 远程等应用即可用。
 
-  用法（必须管理员 PowerShell）：
+  用法（管理员 PowerShell）：
     .\run-tun.ps1 -Password s3cret              # 诊断 + 下载 + 配置 + 启动
     .\run-tun.ps1 -Check                        # 只诊断，不动系统
-    .\run-tun.ps1 -Server 10.200.1.26 -Password s3cret
-
-  前提：跳板机上 `MASK_IP=... TOKEN=s3cret sh start.sh` 已经在跑（18081 + 18082）。
+    .\run-tun.ps1 -Check -Password s3cret       # 带令牌做完整诊断（含出网测试）
 #>
 param(
   [string]$Server    = "10.200.1.26",
@@ -26,6 +24,16 @@ $proxy   = "http://${Server}:${HttpPort}"
 
 function Line($t, $c = "Gray") { Write-Host $t -ForegroundColor $c }
 
+# curl 的错误输出会被 PowerShell 当成 NativeCommandError，这里统一吃掉
+function Invoke-Curl([string[]]$ArgList) {
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $out = & curl.exe @ArgList 2>&1
+    return [pscustomobject]@{ Code = $LASTEXITCODE; Out = ($out -join " ") }
+  } finally { $ErrorActionPreference = $old }
+}
+
 function Test-Tcp([string]$h, [int]$p) {
   $c = New-Object Net.Sockets.TcpClient
   try {
@@ -35,71 +43,74 @@ function Test-Tcp([string]$h, [int]$p) {
   } catch { return $false } finally { $c.Close() }
 }
 
-function Test-HttpProxy() {
-  $a = @("--ssl-no-revoke", "-sS", "-m", "20", "-x", $proxy, "-o", "NUL", "-w", "%{http_code}",
-         "https://api.github.com/zen")
-  if ($Password) { $a = @("--ssl-no-revoke", "-sS", "-m", "20", "-x", $proxy,
-                          "--proxy-header", "Proxy-Authorization: Bearer $Password",
-                          "-o", "NUL", "-w", "%{http_code}", "https://api.github.com/zen") }
-  $code = & curl.exe @a 2>$null
-  return $code
+# 依次尝试：直连 → ghproxy → gh-proxy → ghfast（内网无外网，全靠 18081 代理出去）
+function Fetch-File([string]$url, [string]$out) {
+  $mirrors = @("", "https://ghproxy.net/", "https://gh-proxy.com/", "https://ghfast.top/")
+  foreach ($m in $mirrors) {
+    $u = if ($m) { $m + $url } else { $url }
+    Line ("  尝试 " + $(if ($m) { $m.Split('/')[2] } else { "直连" })) "DarkGray"
+    Remove-Item $out -ErrorAction SilentlyContinue
+    $r = Invoke-Curl @("--ssl-no-revoke", "-L", "--retry", "2", "-m", "180", "-x", $proxy, "-o", $out, $u)
+    if ($r.Code -eq 0 -and (Test-Path $out) -and (Get-Item $out).Length -gt 1000) { return }
+  }
+  throw "所有下载源都失败：$url"
 }
 
 # ---------------- 诊断 ----------------
-Line "== 1. 管理员权限 =="
+Line "== 1. 权限 =="
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
   [Security.Principal.WindowsBuiltInRole]::Administrator)
-if ($isAdmin) { Line "  [OK] 管理员" "Green" } else { Line "  [X] 不是管理员，TUN 建不起来。右键 PowerShell -> 以管理员身份运行" "Red" }
+if ($isAdmin) { Line "  [OK] 管理员" "Green" }
+else { Line "  [X] 不是管理员，TUN 建不起来：右键 PowerShell -> 以管理员身份运行" "Red" }
 
 Line "== 2. 跳板机端口 =="
-foreach ($pair in @(@($HttpPort, "HTTP 代理"), @($SocksPort, "SOCKS5"))) {
-  $ok = Test-Tcp $Server $pair[0]
-  if ($ok) { Line ("  [OK] {0}:{1} ({2})" -f $Server, $pair[0], $pair[1]) "Green" }
-  else     { Line ("  [X]  {0}:{1} ({2}) 连不上：跳板机没起服务、防火墙没放行" -f $Server, $pair[0], $pair[1]) "Red" }
+foreach ($pair in @(@($HttpPort, "HTTP 代理"), @($SocksPort, "SOCKS5/UDP"))) {
+  if (Test-Tcp $Server $pair[0]) { Line ("  [OK] {0}:{1} ({2})" -f $Server, $pair[0], $pair[1]) "Green" }
+  else { Line ("  [X]  {0}:{1} ({2}) 连不上" -f $Server, $pair[0], $pair[1]) "Red" }
 }
 
-Line "== 3. HTTP 代理能否出网 =="
-$code = Test-HttpProxy
-if ($code -match "^(200|403)") { Line "  [OK] 代理响应 $code" "Green" }
-elseif ($code -eq "407") { Line "  [X] 407 令牌不对：-Password 要和跳板机 TOKEN 一致" "Red" }
-else { Line "  [X] 代理没通（返回 '$code'）：先解决第 2 步" "Red" }
+Line "== 3. 代理出网 =="
+if (-not $Password) {
+  Line "  [--] 没给 -Password，跳过（加 -Password 才能测）" "Yellow"
+} else {
+  $r = Invoke-Curl @("--ssl-no-revoke", "-sS", "-m", "20", "-x", $proxy,
+                     "--proxy-header", "Proxy-Authorization: Bearer $Password",
+                     "-o", "NUL", "-w", "%{http_code}", "https://api.github.com/zen")
+  $code = ($r.Out -split "`n" | Select-Object -Last 1).Trim()
+  if ($code -eq "200") { Line "  [OK] api.github.com 200" "Green" }
+  elseif ($code -eq "407") { Line "  [X] 407 令牌不对：-Password 要和跳板机 TOKEN 一致" "Red" }
+  elseif ($code -eq "403") { Line "  [X] 403 目标不在 --allow 白名单" "Red" }
+  else { Line ("  [X] 代理没出网（返回 '{0}'）" -f $code) "Red" }
+  Line "  [注] github.com / codeload.github.com 不通是链路问题，与代理无关" "DarkGray"
+}
 
 Line "== 4. 客户端组件 =="
-Line ("  sing-box.exe : " + $(if (Test-Path $exe) { "已存在" } else { "缺失，启动时自动下载" }))
-Line ("  wintun.dll   : " + $(if (Test-Path (Join-Path $dir "wintun.dll")) { "已存在" } else { "缺失，启动时自动下载" }))
-
-Line "== 5. 当前是否已有 TUN =="
+Line ("  sing-box.exe : " + $(if (Test-Path $exe) { "已存在" } else { "缺失（启动时自动下载）" }))
+Line ("  wintun.dll   : " + $(if (Test-Path (Join-Path $dir "wintun.dll")) { "已存在" } else { "缺失（启动时自动下载）" }))
 $tun = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -match "sing|wintun|tun" }
-if ($tun) { $tun | Format-Table Name, InterfaceDescription, Status -AutoSize | Out-String | Write-Host }
-else { Line "  [--] 没有 TUN 网卡（未运行）" }
+if ($tun) { Line "  [--] 已有 TUN 网卡：$($tun.Name -join ', ')" "Yellow" }
+else { Line "  [--] 当前没有 TUN 网卡（未运行）" }
 
-if ($Check) {
-  Line "`n诊断结束（-Check 模式，未做任何改动）。" "Cyan"
-  exit 0
-}
+if ($Check) { Line "`n诊断结束（-Check，未做任何改动）。" "Cyan"; exit 0 }
 
 if (-not $isAdmin) { exit 1 }
 if ([string]::IsNullOrWhiteSpace($Password)) {
   Line "`n[!] 缺少 -Password（跳板机启动时 TOKEN 的值）" "Red"; exit 1
 }
-if (-not (Test-Path $tplPath)) {
-  Line "`n[!] 找不到 sing-box.json 模板，请与脚本放同一目录" "Red"; exit 1
-}
-
-function Fetch-File([string]$url, [string]$out) {
-  curl.exe --ssl-no-revoke -L --retry 3 -x $proxy -o $out $url
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) { throw "下载失败：$url" }
-}
+if (-not (Test-Path $tplPath)) { Line "`n[!] 找不到 sing-box.json，请与脚本放同一目录" "Red"; exit 1 }
 
 # ---------------- 准备 sing-box（锁 1.11.x，配置格式匹配）----------------
 if (-not (Test-Path $exe)) {
   Line "`n== 下载 sing-box =="
-  $rels = curl.exe --ssl-no-revoke -s -x $proxy "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100" | ConvertFrom-Json
+  $api = "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100"
+  $r = Invoke-Curl @("--ssl-no-revoke", "-s", "-m", "40", "-x", $proxy,
+                     "--proxy-header", "Proxy-Authorization: Bearer $Password", $api)
+  $rels = $r.Out | ConvertFrom-Json
   $rel = $rels | Where-Object { $_.tag_name -like "v1.11.*" } | Select-Object -First 1
   if (-not $rel) { $rel = $rels | Select-Object -First 1 }
   $asset = $rel.assets | Where-Object { $_.name -like "*windows-amd64.zip" } | Select-Object -First 1
-  if (-not $asset) { throw "没有 windows-amd64 包" }
-  Line ("  版本 " + $rel.tag_name)
+  if (-not $asset) { throw "API 里没有 windows-amd64 包" }
+  Line ("  版本 " + $rel.tag_name + " / " + $asset.name)
   $zip = Join-Path $dir "sing-box.zip"
   Fetch-File $asset.browser_download_url $zip
   Expand-Archive -Path $zip -DestinationPath $dir -Force
@@ -124,7 +135,7 @@ if (-not (Test-Path $wintun)) {
     Remove-Item $wz -Force -ErrorAction SilentlyContinue
     Line "  [OK] wintun.dll 就绪" "Green"
   } catch {
-    Line "  [!] wintun 自动下载失败，请手动把 amd64 版 wintun.dll 放到 $dir" "Yellow"
+    Line "  [!] wintun 下载失败，请手动把 amd64 版 wintun.dll 放到 $dir" "Yellow"
   }
 }
 
@@ -135,9 +146,8 @@ $conf = $tpl.Replace("__SERVER__", $Server).Replace("__PORT__", "$SocksPort").
 Set-Content -Path $cfgPath -Value $conf -Encoding UTF8
 Line "`n== 启动 TUN =="
 Line "  服务器 $Server`:$SocksPort  user=$User" "Green"
-Line "  关闭窗口或 Ctrl+C 停止" "Cyan"
-Line "  起来后另开窗口验证：" "Cyan"
-Line "    curl.exe --ssl-no-revoke https://ifconfig.me     # 应显示跳板机出口 IP" "DarkGray"
-Line "    nslookup github.com 8.8.8.8                      # UDP 是否通" "DarkGray"
+Line "  Ctrl+C 或关窗口停止；另开窗口验证：" "Cyan"
+Line "    curl.exe --ssl-no-revoke https://ifconfig.me     # 应是跳板机出口 IP" "DarkGray"
+Line "    nslookup uu.163.com 8.8.8.8                      # UDP 是否通" "DarkGray"
 Write-Host ""
 & $exe run -c $cfgPath
