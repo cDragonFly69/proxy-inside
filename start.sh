@@ -18,6 +18,7 @@ PORT_PANEL="${PANEL_PORT:-9999}"
 PORT_HTTP="${HTTP_PORT:-18081}"
 PORT_SOCKS="${SOCKS_PORT:-18082}"
 PORT_RELAY="${GH_RELAY_PORT:-2222}"
+IMAGE="ccs-proxy:latest"
 
 log()  { printf '\033[36m[start]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[warn]\033[0m %s\n' "$*"; }
@@ -72,6 +73,47 @@ kill_port_owners() {
     done
   done
   sleep 0.5
+}
+
+# ./data 可能被上一版以 root 跑起来的容器改成了 root 属主，
+# 之后宿主用户就写不进去了。这里自动修，不劳用户敲命令。
+fix_data_owner() {
+  mkdir -p "$DIR/data" || die "无法创建 $DIR/data"
+  [ -w "$DIR/data" ] && return 0
+
+  _uid=$(id -u); _gid=$(id -g)
+  warn "$DIR/data 不可写，尝试自动修正为 ${_uid}:${_gid}"
+
+  # 先试最轻的：只是权限位丢了（属主本来就是你）
+  if chmod -R u+rwX "$DIR/data" 2>/dev/null && [ -w "$DIR/data" ]; then
+    log "已补回写权限"
+    return 0
+  fi
+
+  # 1) 用本地已构建的镜像以 root 身份改（不联网、不需要 sudo）
+  if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    if docker run --rm --user 0:0 -v "$DIR:/w" --entrypoint sh "$IMAGE" \
+         -c "chown -R ${_uid}:${_gid} /w/data" >/dev/null 2>&1; then
+      if [ -w "$DIR/data" ]; then
+        log "已用 $IMAGE 修正属主"
+        return 0
+      fi
+    fi
+  fi
+
+  # 2) 宿主机有免密 sudo
+  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    if sudo chown -R "${_uid}:${_gid}" "$DIR/data" 2>/dev/null && [ -w "$DIR/data" ]; then
+      log "已用 sudo 修正属主"
+      return 0
+    fi
+  fi
+
+  # 3) 都不行，给出可直接复制的手动命令
+  warn "自动修正失败，手动执行其中一条后重试："
+  warn "  sudo chown -R ${_uid}:${_gid} $DIR/data"
+  warn "  docker run --rm --user 0:0 -v \"$DIR:/w\" --entrypoint sh $IMAGE -c 'chown -R ${_uid}:${_gid} /w/data'"
+  die "权限未修复，停止启动"
 }
 
 # 干掉以前手动起的裸机进程（它们会占住容器要用的端口）
@@ -130,14 +172,8 @@ do_up() {
     fi
   done
 
-  mkdir -p "$DIR/data" || die "无法创建 $DIR/data"
-  if [ ! -w "$DIR/data" ]; then
-    warn "$DIR/data 不可写（属主可能是 root，上一次容器以 root 建出来的）"
-    warn "修一下属主再启动，任选一条："
-    warn "  sudo chown -R $(id -u):$(id -g) $DIR/data"
-    warn "  docker run --rm -v \"$DIR:/w\" alpine chown -R $(id -u):$(id -g) /w/data"
-    die "权限未修复，停止启动"
-  fi
+  fix_data_owner
+
 
   log "构建镜像"
   $COMPOSE build
